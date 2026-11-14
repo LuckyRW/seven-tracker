@@ -8,7 +8,7 @@ import { beatmapStore, type CharacterRow } from '@oss-idle/addon-sdk';
 import { rateSteps } from '@oss-idle/shared/rate';
 import { replacePlaylist } from '../engine/playlist.js';
 import {
-	attemptsOf, baseOf, failCeiling, MEDALS_KEY, medals7k, progress7k, readAttempts, recorderStatus, screenRates, statusOf, testsOf, totalOf,
+	attemptsOf, baseOf, failCeiling, MEDALS_KEY, medals7k, progress7k, readAttempts, readBars, recorderStatus, screenRates, statusOf, testsOf, totalOf,
 	type Attempt, type Progress7k,
 } from '../engine/seven.js';
 import { formatXp, NumberField, skillBreakdown, skillLabel } from './parts.js';
@@ -40,6 +40,10 @@ const readPicked = (): Record<string, number> => {
 	try { return JSON.parse(localStorage.getItem(PICKED_KEY) ?? '{}') as Record<string, number>; } catch { return {}; }
 };
 const rowKey = (row: { map: { beatmapId: number }; rate: number }) => `${row.map.beatmapId}@${row.rate}`;
+
+const ALL_RATES_KEY = 'seven-tracker:all-rates';
+/** Speed unlocks that open every rate, x0.5 to x1.5. */
+const ALL_RATE_STEPS = 10;
 
 export default function SevenView({ character, version }: { character?: CharacterRow; version: number }) {
 	const [maps, setMaps] = useState<Map7k[]>([]);
@@ -76,7 +80,11 @@ export default function SevenView({ character, version }: { character?: Characte
 	}, [character?.id, version]);
 
 	const byId = useMemo(() => new Map(maps.map(m => [m.beatmapId, m])), [maps]);
-	const rates = useMemo(() => rateSteps(progress?.speedUpgrades ?? 0), [progress?.speedUpgrades]);
+	// the rates the character's Speed has unlocked, or every rate there is (to plan ahead, or when
+	// the 7K progress cannot be read)
+	const [allRates, setAllRatesState] = useState(() => { try { return localStorage.getItem(ALL_RATES_KEY) === '1'; } catch { return false; } });
+	const setAllRates = (on: boolean) => { setAllRatesState(on); try { localStorage.setItem(ALL_RATES_KEY, on ? '1' : '0'); } catch { /* not kept */ } };
+	const rates = useMemo(() => rateSteps(allRates ? ALL_RATE_STEPS : progress?.speedUpgrades ?? 0), [allRates, progress?.speedUpgrades]);
 	const screened = useMemo(() => screenRates(rates), [rates]);
 	const tests = useMemo(() => testsOf(attempts, progress?.levelSum ?? 0), [attempts, progress?.levelSum]);
 	// a fail rules out every harder map and rate too, until a skill levels up
@@ -86,16 +94,23 @@ export default function SevenView({ character, version }: { character?: Characte
 	const measured = useMemo(() => {
 		const rows: Measured[] = [];
 		const ordered = [...attempts].sort((a, b) => a.startedAt - b.startedAt);
+		// the warm-up bar at every 7K play's start, fails and unrecorded plays included, and the
+		// recorded plays' own: the bar a play left behind is the next start's
+		const id = Number(character?.id);
+		const marks = [
+			...readBars().filter(m => m.characterId === id).map(m => ({ at: m.at, bar: m.bar })),
+			...ordered.filter(a => a.bar !== undefined).map(a => ({ at: a.startedAt, bar: a.bar as number })),
+		].sort((a, b) => a.at - b.at);
 		const drifts = new Map<string, number[]>();
-		ordered.forEach((a, i) => {
-			const next = ordered[i + 1];
+		for (const a of ordered) {
 			const map = byId.get(a.beatmapId);
-			if (!map || a.bar === undefined || next?.bar === undefined) return;
+			if (!map || a.bar === undefined) continue;
+			const next = marks.find(m => m.at > a.startedAt + 1000);
 			// the next play started soon after: the change is this play's, and the wait after it
-			if (next.startedAt - a.startedAt > (map.lengthSec / a.rate + 600) * 1000) return;
+			if (!next || next.at - a.startedAt > (map.lengthSec / a.rate + 600) * 1000) continue;
 			const key = `${a.beatmapId}@${a.rate}@${a.mods}`;
 			drifts.set(key, [...drifts.get(key) ?? [], next.bar - a.bar]);
-		});
+		}
 		for (const [key, t] of tests) {
 			const [id, mods] = key.split('|');
 			if (mods) continue; // no mods only, for now
@@ -211,6 +226,9 @@ export default function SevenView({ character, version }: { character?: Characte
 						{recorderStatus.problem ? ` · ⚠ ${recorderStatus.problem}` : ''}
 					</span>
 					<span className="hint">{attempts.length.toLocaleString()} plays recorded · {maps.length.toLocaleString()} 7K maps downloaded · {rates.length} rates</span>
+					<label className="strain-filter" title="Every rate from x0.5 to x1.5, not only the ones your 7K Speed has unlocked">
+						<input type="checkbox" checked={allRates} onChange={e => setAllRates(e.target.checked)} /> All rates
+					</label>
 					<span className="spacer" />
 					<label className="strain-filter" title="Your medals' XP multiplier: the same on every skill, so it changes no ranking, only the numbers">
 						Medals ×

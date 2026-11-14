@@ -126,7 +126,8 @@ export const progress7k = async (characterId: number): Promise<Progress7k | unde
 		levels,
 		own: Object.fromEntries(SKILLS_7K.map(s => [s, skillXPMultiplier(num(`${s}Upgrades`), num(`${s}Overdrive`), num(`${s}Prestige`))])),
 		genetics: geneticsMultipliers(String(row.geneticsJson ?? '')),
-		speedUpgrades: num('speedUpgrades'),
+		// rates open a step per Speed upgrade and per Speed prestige (rate.ts rateUnlocks)
+		speedUpgrades: num('speedUpgrades') + num('speedPrestige'),
 		levelSum: Object.values(levels).reduce((a, b) => a + b, 0),
 	};
 };
@@ -176,6 +177,21 @@ const writeAttempts = (all: Attempt[]): boolean => {
 export const MEDALS_KEY = 'oss-idle-sim:7k-medals';
 export const medals7k = (): number => {
 	try { return Number(localStorage.getItem(MEDALS_KEY)) || 1; } catch { return 1; }
+};
+
+/** The warm-up bar at a 7K play's start: every start is noted, fails and unrecorded plays
+ *  included, so drift (one start's bar to the next's) is not broken by a play that was not kept. */
+export type BarMark = { token: string; at: number; bar: number; characterId: number };
+const BARS_KEY = 'seven-tracker:bars';
+const MAX_BARS = 6000;
+export const readBars = (): BarMark[] => {
+	try { return JSON.parse(localStorage.getItem(BARS_KEY) ?? '[]') as BarMark[]; } catch { return []; }
+};
+const noteBar = (mark: BarMark) => {
+	const all = readBars();
+	if (all.some(m => m.token === mark.token)) return;
+	all.push(mark);
+	try { localStorage.setItem(BARS_KEY, JSON.stringify(all.slice(-MAX_BARS))); } catch { /* not kept */ }
 };
 
 /** Skills only 7K has: a result gaining any of them is a 7K play's. */
@@ -240,6 +256,7 @@ export const recordPlays = (characterId: () => number | undefined, onAttempt: ()
 			const id = characterId() ?? lastId;
 			if (id === undefined) { recorderStatus.problem = 'a 7K play started before the character was known'; console.warn('[7K tracker] 7K play not recorded: no character yet'); return; }
 			lastId = id;
+			if (r.warmupBar !== undefined) noteBar({ token: r.token, at: Date.now(), bar: r.warmupBar, characterId: id });
 			const play: Started = { characterId: id, beatmapId: r.beatmapId, rate: r.rate, mods: modsKey(r.mods ?? []), startedAt: Date.now(), fatigue: r.fatigue ?? 0, bar: r.warmupBar };
 			started.set(r.token, play);
 			recorderStatus.waiting = started.size;
