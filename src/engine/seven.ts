@@ -96,9 +96,29 @@ export type Progress7k = {
 	levelSum: number;
 };
 
+type Row = Record<string, number | string>;
+/**
+ * The character's row of `character_mania7k`. The game keys it on `characterId`, but a
+ * database made by an earlier beta can lack that column ("no such column: characterId"):
+ * then it is read by whichever key the table has, or as its only row.
+ */
+const progressRow = async (characterId: number): Promise<Row | undefined> => {
+	const byKey = (key: string) => gameDb.first<Row>(`SELECT * FROM character_mania7k WHERE ${key} = ?`, [characterId]);
+	try { return await byKey('characterId') ?? undefined; } catch { /* no such column */ }
+	try {
+		const columns = (await gameDb.select<{ name: string }>('PRAGMA table_info(character_mania7k)')).map(c => c.name);
+		const key = ['character_id', 'charId', 'id'].find(c => columns.includes(c));
+		if (key) return await byKey(key) ?? undefined;
+		const rows = await gameDb.select<Row>('SELECT * FROM character_mania7k LIMIT 2');
+		return rows.length === 1 ? rows[0] : undefined;
+	} catch {
+		return undefined;
+	}
+};
+
 /** The character's 7K progress: its own table, `character_mania7k`. */
 export const progress7k = async (characterId: number): Promise<Progress7k | undefined> => {
-	const row = await gameDb.first<Record<string, number | string>>('SELECT * FROM character_mania7k WHERE characterId = ?', [characterId]).catch(() => undefined);
+	const row = await progressRow(characterId);
 	if (!row) return undefined;
 	const num = (key: string) => Number(row[key]) || 0;
 	const levels = Object.fromEntries(SKILLS_7K.map(s => [s, num(s)]));
@@ -158,6 +178,9 @@ export const medals7k = (): number => {
 	try { return Number(localStorage.getItem(MEDALS_KEY)) || 1; } catch { return 1; }
 };
 
+/** Skills only 7K has: a result gaining any of them is a 7K play's. */
+const ONLY_7K = new Set(['jacks', 'independence', 'ln', 'technical', 'focus', 'sv']);
+
 type Started = { characterId: number; beatmapId: number; rate: number; mods: string; startedAt: number; fatigue: number; bar?: number; progress?: Progress7k };
 
 /** What the recorder has seen, for the 7K tab to show. */
@@ -182,6 +205,27 @@ export const recordPlays = (characterId: () => number | undefined, onAttempt: ()
 	const hooked = new WeakSet<WebSocket>();
 
 	let lastId: number | undefined;
+	/** plays seen running in the server's checkpoints, by token */
+	const seen = new Map<string, { beatmapId: number; rate: number; mods: string; at: number }>();
+	/**
+	 * A result whose start the recorder never saw: a 7K play by its skills (7K's own names in
+	 * its gains), with the map, rate and mods from its score or the server's checkpoints. How
+	 * tired and warm it started is unknown, so fatigue counts as none.
+	 */
+	const unstarted = (token: string, result: Record<string, unknown>): Started | undefined => {
+		const gains = (result.gains ?? []) as { skill: string }[];
+		if (!gains.some(g => ONLY_7K.has(g.skill))) return undefined;
+		const score = result.score as { beatmapId?: number; rate?: number; mods?: Mod[] } | undefined;
+		const state = seen.get(token);
+		const beatmapId = score?.beatmapId ?? state?.beatmapId;
+		const id = characterId() ?? lastId;
+		if (!beatmapId || id === undefined) { console.warn(`[7K tracker] 7K result ${token.slice(0, 6)} not recorded: ${beatmapId ? 'no character yet' : 'its map is unknown'}`); return undefined; }
+		console.info(`[7K tracker] recording a 7K play whose start was not seen: ${beatmapId}`);
+		return {
+			characterId: id, beatmapId, rate: Number(score?.rate ?? state?.rate) || 1,
+			mods: score?.mods ? modsKey(score.mods) : state?.mods ?? '', startedAt: state?.at ?? Date.now(), fatigue: 0,
+		};
+	};
 	const onMessage = (e: MessageEvent) => {
 		if (typeof e.data !== 'string' || !e.data.includes('"play:')) return;
 		let msg: { type?: string; token?: string; result?: Record<string, unknown> };
@@ -203,9 +247,17 @@ export const recordPlays = (characterId: () => number | undefined, onAttempt: ()
 				play.progress = p;
 				if (!p) recorderStatus.problem = 'no 7K progress row (character_mania7k) for this character: levels and multipliers come from the result alone';
 			});
+		} else if (msg.type === 'play:state') {
+			// a play the game follows or chains into without a start of its own (after a fail, a
+			// reconnect, another window): what is known of it from the server's checkpoints
+			const s = (msg as { state?: { phase?: string; token?: string; beatmapId?: number; rate?: number; mods?: Mod[] } }).state;
+			if (s?.phase === 'active' && s.token && !seen.has(s.token) && s.beatmapId) {
+				seen.set(s.token, { beatmapId: s.beatmapId, rate: Number(s.rate) || 1, mods: modsKey(s.mods ?? []), at: Date.now() });
+			}
 		} else if (msg.type === 'play:result' && msg.token && msg.result?.ok === true) {
-			const play = started.get(msg.token);
-			if (!play || done.has(msg.token)) return;
+			if (done.has(msg.token)) return;
+			const play = started.get(msg.token) ?? unstarted(msg.token, msg.result);
+			if (!play) return;
 			recorderStatus.waiting = started.size - 1;
 			done.add(msg.token);
 			started.delete(msg.token);
