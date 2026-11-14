@@ -34,6 +34,13 @@ type Measured = {
 
 const MAX_ENTRIES_DEFAULT = 200;
 
+/** The rows picked by hand for a playlist, by `beatmapId@rate`, with each one's repeat count: kept across restarts. */
+const PICKED_KEY = 'seven-tracker:picked';
+const readPicked = (): Record<string, number> => {
+	try { return JSON.parse(localStorage.getItem(PICKED_KEY) ?? '{}') as Record<string, number>; } catch { return {}; }
+};
+const rowKey = (row: { map: { beatmapId: number }; rate: number }) => `${row.map.beatmapId}@${row.rate}`;
+
 export default function SevenView({ character, version }: { character?: CharacterRow; version: number }) {
 	const [maps, setMaps] = useState<Map7k[]>([]);
 	const [progress, setProgress] = useState<Progress7k>();
@@ -43,6 +50,13 @@ export default function SevenView({ character, version }: { character?: Characte
 	const [maxEntries, setMaxEntries] = useState(MAX_ENTRIES_DEFAULT);
 	const [refineMaps, setRefineMaps] = useState(20);
 	const [saved, setSaved] = useState('');
+	const [picked, setPickedState] = useState<Record<string, number>>(readPicked);
+	const [pickedName, setPickedName] = useState('7K farm');
+	const [pickedOnly, setPickedOnly] = useState(false);
+	const setPicked = (next: Record<string, number>) => {
+		setPickedState(next);
+		try { localStorage.setItem(PICKED_KEY, JSON.stringify(next)); } catch { /* not kept */ }
+	};
 	// the recorder's status changes on its own: drawn again every few seconds
 	const [, setTick] = useState(0);
 	useEffect(() => { const t = setInterval(() => setTick(n => n + 1), 2000); return () => clearInterval(t); }, []);
@@ -149,6 +163,34 @@ export default function SevenView({ character, version }: { character?: Characte
 		}
 	};
 
+	// the hand-picked playlist: one loop of it, every entry its repeats
+	const chosen = measured.filter(row => picked[rowKey(row)]);
+	const loop = chosen.reduce((sum, row) => {
+		const times = picked[rowKey(row)];
+		const seconds = row.map.lengthSec / row.rate * times;
+		const skills = { ...sum.skills };
+		for (const [skill, v] of Object.entries(row.skills)) skills[skill] = (skills[skill] ?? 0) + v * seconds;
+		return {
+			plays: sum.plays + times,
+			seconds: sum.seconds + seconds,
+			xp: sum.xp + row.perSecond * seconds,
+			drift: sum.drift + (row.drift ?? 0) * times,
+			unknownDrift: sum.unknownDrift || row.drift === undefined,
+			skills,
+		};
+	}, { plays: 0, seconds: 0, xp: 0, drift: 0, unknownDrift: false, skills: {} as Record<string, number> });
+	const savePicked = async () => {
+		if (!chosen.length) return;
+		setSaved('Saving...');
+		try {
+			const { created } = await replacePlaylist(pickedName, chosen.map(row => ({ beatmapId: row.map.beatmapId, rate: row.rate, mods: [], repeat: picked[rowKey(row)] })));
+			setSaved(`${created ? 'Created' : 'Updated'} "${pickedName}" with ${chosen.length} maps (${loop.plays} plays a loop). Reopen song select to see it.`);
+		} catch (e) {
+			setSaved(e instanceof Error ? e.message : String(e));
+		}
+	};
+	const shown = pickedOnly ? chosen : measured.slice(0, 200);
+
 	return (
 		<section className="maps target">
 			<div className="target-form">
@@ -190,14 +232,35 @@ export default function SevenView({ character, version }: { character?: Characte
 					</label>
 					<button disabled={!measured.length} onClick={() => void save('refine')} title="The best measured maps at the untested rates between the screened rates either side of their best">Refining</button>
 				</div>
+				<div className="target-row">
+					<strong>Your playlist</strong>
+					<input aria-label="Your playlist's name" value={pickedName} onChange={e => setPickedName(e.target.value)} />
+					<span className="hint" title={loop.seconds ? skillBreakdown(Object.fromEntries(Object.entries(loop.skills).map(([k, v]) => [k, v / loop.seconds]))) : undefined}>
+						{chosen.length
+							? <>{chosen.length} maps, {loop.plays} plays a loop · <b>{formatXp(loop.xp / loop.seconds)}</b> base XP/s · drift {loop.drift > 0 ? '+' : ''}{(loop.drift * 100).toFixed(1)}% a loop{loop.unknownDrift ? ' (some unknown)' : ''}</>
+							: 'Tick rows below to pick maps, and set how many times each repeats.'}
+					</span>
+					<span className="spacer" />
+					<label className="strain-filter"><input type="checkbox" checked={pickedOnly} onChange={e => setPickedOnly(e.target.checked)} /> picked only</label>
+					<button disabled={!chosen.length} onClick={() => setPicked({})}>Clear</button>
+					<button disabled={!chosen.length} onClick={() => void savePicked()} title="Save the ticked rows, each at its repeats, as a playlist">Save playlist</button>
+				</div>
 				{saved && <p className="hint">{saved}</p>}
 			</div>
 			<div className="rows">
-				<div className="row crown head">
-					<span>Map</span><span className="num">Rate</span><span className="num">Base XP/s</span><span className="num">Best skill</span><span className="num">Drift / play</span>
+				<div className="row seven head">
+					<span title="Pick for your playlist, and how many times in a row">Pick ×</span><span>Map</span><span className="num">Rate</span><span className="num">Base XP/s</span><span className="num">Best skill</span><span className="num">Drift / play</span>
 				</div>
-				{measured.slice(0, 200).map(row => (
-					<div className="row crown" key={`${row.map.beatmapId}@${row.rate}`}>
+				{shown.map(row => (
+					<div className="row seven" key={rowKey(row)}>
+						<span className="pick">
+							<input type="checkbox" aria-label="Pick for your playlist" checked={!!picked[rowKey(row)]}
+								onChange={e => { const next = { ...picked }; if (e.target.checked) next[rowKey(row)] = 1; else delete next[rowKey(row)]; setPicked(next); }} />
+							{picked[rowKey(row)] ? (
+								<NumberField aria-label="Repeats" min={1} max={100} integer value={picked[rowKey(row)]}
+									onChange={v => setPicked({ ...picked, [rowKey(row)]: v })} />
+							) : null}
+						</span>
 						<span className="name" title={`${row.plays} plays, ${row.fails} failed · last ${new Date(row.at).toLocaleString()}`}>
 							{row.map.artist} - {row.map.title} <span className="hint">[{row.map.version}]</span>
 						</span>
