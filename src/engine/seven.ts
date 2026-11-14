@@ -154,6 +154,8 @@ export type Attempt = {
 	/** each skill's level before the play */
 	levels: Record<string, number>;
 	levelSum: number;
+	/** the level total after it: its result's levels, for when the 7K progress cannot be read */
+	levelSumAfter?: number;
 	own: Record<string, number>;
 	genetics: Record<string, number>;
 };
@@ -289,7 +291,7 @@ export const recordPlays = (
 			recorderStatus.waiting = started.size - 1;
 			done.add(msg.token);
 			started.delete(msg.token);
-			const gains = (msg.result.gains ?? []) as { skill: string; gained: number; fromLevel: number }[];
+			const gains = (msg.result.gains ?? []) as { skill: string; gained: number; fromLevel: number; toLevel?: number }[];
 			const levels = { ...play.progress?.levels, ...Object.fromEntries(gains.map(g => [g.skill, g.fromLevel])) };
 			const all = readAttempts();
 			all.push({
@@ -299,6 +301,7 @@ export const recordPlays = (
 				gains: Object.fromEntries(gains.filter(g => g.gained > 0).map(g => [g.skill, g.gained])),
 				levels,
 				levelSum: Object.values(levels).reduce((a, b) => a + Number(b), 0),
+				levelSumAfter: Object.values({ ...levels, ...Object.fromEntries(gains.map(g => [g.skill, g.toLevel ?? g.fromLevel])) }).reduce((a, b) => a + Number(b), 0),
 				own: play.progress?.own ?? {},
 				genetics: play.progress?.genetics ?? {},
 			});
@@ -376,6 +379,14 @@ export type MapTests = {
 	/** Rates above this failed since the last level-up. */
 	hardAt?: number;
 };
+
+/**
+ * The character's 7K level total now: its progress row's, or, when that cannot be read, the
+ * highest any recorded play left it at (a play's levels after it, else before it). The rule-outs
+ * from fails lift once this passes the total a fail was played at.
+ */
+export const levelSumNow = (attempts: readonly Attempt[], progress?: { levelSum: number }): number =>
+	attempts.reduce((most, a) => Math.max(most, a.levelSumAfter ?? a.levelSum), progress?.levelSum ?? 0);
 
 export const testsOf = (attempts: readonly Attempt[], levelSum: number): Map<string, MapTests> => {
 	const out = new Map<string, MapTests>();

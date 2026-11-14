@@ -581,3 +581,13 @@ header {
 /* the 7K box can be dragged out of the way (double-click puts it back) */
 .last-play.draggable { pointer-events: auto; cursor: grab; user-select: none; touch-action: none; }
 .last-play.draggable:active { cursor: grabbing; }
+
+/* the 7K tracker's tabs */
+.seven-list { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.seven-saved { padding: 6px 18px 0; margin: 0; }
+.row.playlist.seven-playlist { grid-template-columns: 22px minmax(0, 1fr) 190px 72px 60px 28px; }
+.row.seven-maps { grid-template-columns: 30px minmax(0, 1fr) 56px 76px 130px 60px 56px; height: 44px; }
+.row.seven-maps.picked { background: rgb(109 74 255 / 8%); }
+.row.seven-maps .add { width: 26px; height: 26px; padding: 0; font-weight: 700; }
+.row.seven-maps .add.on { color: #fff; background: #6d4aff; }
+.muted { color: var(--muted, #888); }

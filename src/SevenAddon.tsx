@@ -71,12 +71,7 @@ export class SevenAddon extends ReactAddon {
 				<div style={{ display: this.open ? 'contents' : 'none' }} aria-hidden={!this.open}>
 					<div className="backdrop" onClick={() => this.toggle()} />
 					<div className="panel" role="dialog" aria-label="7K tracker">
-						<header>
-							<h1>7K tracker</h1>
-							<span className="spacer" />
-							<button onClick={() => this.toggle()} aria-label="Close">✕</button>
-						</header>
-						<SevenView character={this.character} version={this.version} />
+						<SevenView character={this.character} version={this.version} onClose={() => this.toggle()} />
 					</div>
 				</div>
 				{!this.open && <SevenBox version={this.version} />}

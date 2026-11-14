@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from 'react';
 import { beatmapStore, gameCharacter, type CharacterRow } from '@oss-idle/addon-sdk';
 import { modsKey, parseMods, type Mod } from '@oss-idle/shared/mods';
 import { allowedRate } from '@oss-idle/shared/rate';
-import { attemptsOf, baseOf, failCeiling, progress7k, RULESET_7K, statusOf, testsOf, type RateStatus } from '../engine/seven.js';
+import { attemptsOf, baseOf, failCeiling, levelSumNow, progress7k, RULESET_7K, statusOf, testsOf, type RateStatus } from '../engine/seven.js';
 import { formatXp, skillBreakdown, skillLabel } from './parts.js';
 
 /** The ruleset the player picked, as the game's add-on host says it. */
@@ -142,7 +142,7 @@ export default function SevenBox({ version }: { version: number }) {
 			if (gone) return;
 			setSpeed(progress?.speedUpgrades ?? 0);
 			const all = attemptsOf(Number(character.id)).sort((a, b) => a.startedAt - b.startedAt);
-			const levelSum = progress?.levelSum ?? 0;
+			const levelSum = levelSumNow(all, progress);
 			const tests = testsOf(all, levelSum).get(`${picked.beatmapId}|${picked.mods}`);
 			const own = stars.get(picked.beatmapId);
 			setStatus(statusOf(tests, picked.rate, own ? own * picked.rate : undefined, failCeiling(all, levelSum, id => stars.get(id))));

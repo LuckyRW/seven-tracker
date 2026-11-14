@@ -1,6 +1,8 @@
 /**
- * 7K: maps measured from real plays, what is left to test, and playlists that test it.
- * See `engine/seven.ts`.
+ * The 7K tracker's panel, laid out like oss!idle sim's: a Playlist tab (the maps you picked,
+ * each repeated so many times, and what a loop of them is worth), an All maps tab (every map
+ * and rate measured from your plays, best first) and a Testing tab (what is left to test, and
+ * playlists that test it). See `engine/seven.ts`.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -8,10 +10,10 @@ import { beatmapStore, type CharacterRow } from '@oss-idle/addon-sdk';
 import { rateSteps } from '@oss-idle/shared/rate';
 import { replacePlaylist } from '../engine/playlist.js';
 import {
-	attemptsOf, baseOf, failCeiling, MEDALS_KEY, medals7k, progress7k, readAttempts, readBars, recorderStatus, screenRates, statusOf, testsOf, totalOf,
+	attemptsOf, baseOf, failCeiling, levelSumNow, MEDALS_KEY, medals7k, progress7k, readBars, recorderStatus, screenRates, statusOf, testsOf, totalOf,
 	type Attempt, type Progress7k,
 } from '../engine/seven.js';
-import { formatXp, NumberField, skillBreakdown, skillLabel } from './parts.js';
+import { formatTime, formatXp, NumberField, skillBreakdown, skillLabel } from './parts.js';
 
 type Map7k = { beatmapId: number; title: string; artist: string; version: string; difficulty: number; lengthSec: number };
 
@@ -32,35 +34,48 @@ type Measured = {
 	drift?: number;
 };
 
+type Tab = 'playlist' | 'maps' | 'testing';
+
 const MAX_ENTRIES_DEFAULT = 200;
+const MAX_REPEAT = 100;
 
-/** The rows picked by hand for a playlist, by `beatmapId@rate`, with each one's repeat count: kept across restarts. */
+/** The maps picked for your playlist, by `beatmapId@rate`, with each one's repeat count: kept across restarts. */
 const PICKED_KEY = 'seven-tracker:picked';
-const readPicked = (): Record<string, number> => {
-	try { return JSON.parse(localStorage.getItem(PICKED_KEY) ?? '{}') as Record<string, number>; } catch { return {}; }
-};
-const rowKey = (row: { map: { beatmapId: number }; rate: number }) => `${row.map.beatmapId}@${row.rate}`;
-
+/** The order they were picked in: the playlist plays them in it. */
+const ORDER_KEY = 'seven-tracker:picked-order';
+const TAB_KEY = 'seven-tracker:tab';
 const ALL_RATES_KEY = 'seven-tracker:all-rates';
 /** Speed unlocks that open every rate, x0.5 to x1.5. */
 const ALL_RATE_STEPS = 10;
 
-export default function SevenView({ character, version }: { character?: CharacterRow; version: number }) {
+const load = <T,>(key: string, fallback: T): T => {
+	try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v) as T; } catch { return fallback; }
+};
+const keep = (key: string, value: unknown) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* not kept */ } };
+
+const rowKey = (row: { map: { beatmapId: number }; rate: number }) => `${row.map.beatmapId}@${row.rate}`;
+const signed = (n: number, digits = 1) => `${n > 0 ? '+' : ''}${n.toFixed(digits)}`;
+const driftColor = (d?: number) => (d === undefined ? 'var(--faint, #888)' : d > 0 ? '#f87171' : '#38bdf8');
+
+/** A map's title and, under it, its difficulty, stars and length at its rate. */
+function MapName({ map, rate }: { map: Map7k; rate: number }) {
+	return (
+		<div className="map">
+			<div className="title">{map.artist} - {map.title}</div>
+			<div className="sub">{map.version} · {map.difficulty.toFixed(2)}★ · {formatTime(map.lengthSec / rate)}</div>
+		</div>
+	);
+}
+
+export default function SevenView({ character, version, onClose }: { character?: CharacterRow; version: number; onClose: () => void }) {
+	const [tab, setTabState] = useState<Tab>(() => load<Tab>(TAB_KEY, 'playlist'));
+	const setTab = (t: Tab) => { setTabState(t); keep(TAB_KEY, t); };
 	const [maps, setMaps] = useState<Map7k[]>([]);
 	const [progress, setProgress] = useState<Progress7k>();
 	const [attempts, setAttempts] = useState<Attempt[]>([]);
 	const [medals, setMedals] = useState(medals7k());
-	const [name, setName] = useState('7K tests');
-	const [maxEntries, setMaxEntries] = useState(MAX_ENTRIES_DEFAULT);
-	const [refineMaps, setRefineMaps] = useState(20);
 	const [saved, setSaved] = useState('');
-	const [picked, setPickedState] = useState<Record<string, number>>(readPicked);
-	const [pickedName, setPickedName] = useState('7K farm');
-	const [pickedOnly, setPickedOnly] = useState(false);
-	const setPicked = (next: Record<string, number>) => {
-		setPickedState(next);
-		try { localStorage.setItem(PICKED_KEY, JSON.stringify(next)); } catch { /* not kept */ }
-	};
+
 	// the recorder's status changes on its own: drawn again every few seconds
 	const [, setTick] = useState(0);
 	useEffect(() => { const t = setInterval(() => setTick(n => n + 1), 2000); return () => clearInterval(t); }, []);
@@ -80,25 +95,24 @@ export default function SevenView({ character, version }: { character?: Characte
 	}, [character?.id, version]);
 
 	const byId = useMemo(() => new Map(maps.map(m => [m.beatmapId, m])), [maps]);
-	// the rates the character's Speed has unlocked, or every rate there is (to plan ahead, or when
-	// the 7K progress cannot be read)
-	const [allRates, setAllRatesState] = useState(() => { try { return localStorage.getItem(ALL_RATES_KEY) === '1'; } catch { return false; } });
-	const setAllRates = (on: boolean) => { setAllRatesState(on); try { localStorage.setItem(ALL_RATES_KEY, on ? '1' : '0'); } catch { /* not kept */ } };
+	// the rates the character's Speed has unlocked, or every rate there is
+	// kept as true, or as '1' (which reads back as 1) by an earlier version
+	const [allRates, setAllRatesState] = useState(() => { const v = load<unknown>(ALL_RATES_KEY, false); return v === true || v === 1; });
+	const setAllRates = (on: boolean) => { setAllRatesState(on); keep(ALL_RATES_KEY, on); };
 	const rates = useMemo(() => rateSteps(allRates ? ALL_RATE_STEPS : progress?.speedUpgrades ?? 0), [allRates, progress?.speedUpgrades]);
 	const screened = useMemo(() => screenRates(rates), [rates]);
-	const tests = useMemo(() => testsOf(attempts, progress?.levelSum ?? 0), [attempts, progress?.levelSum]);
+	const levelNow = useMemo(() => levelSumNow(attempts, progress), [attempts, progress]);
+	const tests = useMemo(() => testsOf(attempts, levelNow), [attempts, levelNow]);
 	// a fail rules out every harder map and rate too, until a skill levels up
-	const ceiling = useMemo(() => failCeiling(attempts, progress?.levelSum ?? 0, id => byId.get(id)?.difficulty), [attempts, progress?.levelSum, byId]);
+	const ceiling = useMemo(() => failCeiling(attempts, levelNow, id => byId.get(id)?.difficulty), [attempts, levelNow, byId]);
 	const statusAt = (m: Map7k, rate: number) => statusOf(tests.get(`${m.beatmapId}|`), rate, m.difficulty * rate, ceiling);
 
 	const measured = useMemo(() => {
 		const rows: Measured[] = [];
 		const ordered = [...attempts].sort((a, b) => a.startedAt - b.startedAt);
-		// the warm-up bar at every 7K play's start, fails and unrecorded plays included, and the
-		// recorded plays' own: the bar a play left behind is the next start's
+		// drift in strain minutes, as the game's API counts them at each 7K start (fails and
+		// unrecorded plays included): a play's drift is the change to the next start
 		const id = Number(character?.id);
-		// drift in strain minutes, as the game's API counts them at each start: the same minute
-		// anywhere on the warm-up bar, which stretches some stretches of it many times over others
 		const marks = [
 			...readBars().filter(m => m.characterId === id && m.minutes !== undefined).map(m => ({ at: m.at, minutes: m.minutes as number })),
 			...ordered.filter(a => a.minutes !== undefined).map(a => ({ at: a.startedAt, minutes: a.minutes as number })),
@@ -114,9 +128,9 @@ export default function SevenView({ character, version }: { character?: Characte
 			drifts.set(key, [...drifts.get(key) ?? [], next.minutes - a.minutes]);
 		}
 		for (const [key, t] of tests) {
-			const [id, mods] = key.split('|');
+			const [mapId, mods] = key.split('|');
 			if (mods) continue; // no mods only, for now
-			const map = byId.get(Number(id));
+			const map = byId.get(Number(mapId));
 			if (!map) continue;
 			for (const [rate, list] of t.byRate) {
 				const passes = list.filter(a => !a.failed);
@@ -125,7 +139,7 @@ export default function SevenView({ character, version }: { character?: Characte
 				const base = baseOf(last, ordered);
 				const seconds = map.lengthSec / rate;
 				const [top, topXp] = Object.entries(base).sort((a, b) => b[1] - a[1])[0] ?? ['', 0];
-				const d = drifts.get(`${id}@${rate}@`);
+				const d = drifts.get(`${mapId}@${rate}@`);
 				rows.push({
 					map, rate, perSecond: totalOf(base) / seconds, skills: Object.fromEntries(Object.entries(base).map(([s, xp]) => [s, xp / seconds])), top, topPerSecond: topXp / seconds,
 					level: top ? last.levels[top] : undefined, at: last.startedAt, plays: list.length, fails: list.length - passes.length,
@@ -136,7 +150,75 @@ export default function SevenView({ character, version }: { character?: Characte
 		return rows.sort((a, b) => b.perSecond - a.perSecond);
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [tests, byId, attempts, medals]);
+	const byKey = useMemo(() => new Map(measured.map(r => [rowKey(r), r])), [measured]);
 
+	// ---- your playlist ----
+	const [picked, setPickedState] = useState<Record<string, number>>(() => load(PICKED_KEY, {}));
+	const [order, setOrderState] = useState<string[]>(() => load<string[]>(ORDER_KEY, []));
+	const [pickedName, setPickedName] = useState('7K farm');
+	const setPicked = (next: Record<string, number>) => {
+		setPickedState(next);
+		keep(PICKED_KEY, next);
+		// the order follows what is picked: new ones at the end, removed ones gone
+		const kept = order.filter(k => next[k]);
+		for (const k of Object.keys(next)) if (!kept.includes(k)) kept.push(k);
+		setOrderState(kept);
+		keep(ORDER_KEY, kept);
+	};
+	const toggle = (key: string) => {
+		const next = { ...picked };
+		if (next[key]) delete next[key]; else next[key] = 1;
+		setPicked(next);
+	};
+	const rotation = [...order, ...Object.keys(picked).filter(k => !order.includes(k))]
+		.filter(k => picked[k] && byKey.has(k))
+		.map(k => byKey.get(k) as Measured);
+	const loop = rotation.reduce((sum, row) => {
+		const times = picked[rowKey(row)];
+		const seconds = row.map.lengthSec / row.rate * times;
+		const skills = { ...sum.skills };
+		for (const [skill, v] of Object.entries(row.skills)) skills[skill] = (skills[skill] ?? 0) + v * seconds;
+		return {
+			plays: sum.plays + times,
+			seconds: sum.seconds + seconds,
+			xp: sum.xp + row.perSecond * seconds,
+			drift: sum.drift + (row.drift ?? 0) * times,
+			unknownDrift: sum.unknownDrift || row.drift === undefined,
+			skills,
+		};
+	}, { plays: 0, seconds: 0, xp: 0, drift: 0, unknownDrift: false, skills: {} as Record<string, number> });
+	const savePicked = async () => {
+		if (!rotation.length) return;
+		setSaved('Saving...');
+		try {
+			const { created } = await replacePlaylist(pickedName, rotation.map(row => ({ beatmapId: row.map.beatmapId, rate: row.rate, mods: [], repeat: picked[rowKey(row)] })));
+			setSaved(`${created ? 'Created' : 'Updated'} "${pickedName}" with ${rotation.length} maps (${loop.plays} plays a loop). Reopen song select to see it.`);
+		} catch (e) {
+			setSaved(e instanceof Error ? e.message : String(e));
+		}
+	};
+
+	// ---- all maps ----
+	const [query, setQuery] = useState('');
+	const [everyRate, setEveryRate] = useState(false);
+	const [driftFilter, setDriftFilter] = useState<'all' | 'warm' | 'cool'>('all');
+	const listed = useMemo(() => {
+		let list = measured;
+		if (!everyRate) {
+			const seen = new Set<number>();
+			list = list.filter(r => !seen.has(r.map.beatmapId) && (seen.add(r.map.beatmapId), true));
+		}
+		if (driftFilter === 'warm') list = list.filter(r => r.drift !== undefined && r.drift > 0);
+		if (driftFilter === 'cool') list = list.filter(r => r.drift !== undefined && r.drift <= 0);
+		const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+		if (words.length) list = list.filter(r => words.every(w => `${r.map.artist} ${r.map.title} ${r.map.version}`.toLowerCase().includes(w)));
+		return list;
+	}, [measured, everyRate, driftFilter, query]);
+
+	// ---- testing ----
+	const [testName, setTestName] = useState('7K tests');
+	const [maxEntries, setMaxEntries] = useState(MAX_ENTRIES_DEFAULT);
+	const [refineMaps, setRefineMaps] = useState(20);
 	const counts = useMemo(() => {
 		let untested = 0, ruledOut = 0, tested = 0;
 		for (const m of maps) {
@@ -150,8 +232,7 @@ export default function SevenView({ character, version }: { character?: Characte
 		return { untested, ruledOut, tested };
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [maps, screened, tests, ceiling]);
-
-	const save = async (kind: 'x1' | 'screen' | 'refine') => {
+	const saveTests = async (kind: 'x1' | 'screen' | 'refine') => {
 		const entries: { beatmapId: number; rate: number }[] = [];
 		const open = (id: number, rate: number) => { const m = byId.get(id); return !!m && statusAt(m, rate) === 'untested'; };
 		if (kind === 'x1') {
@@ -177,129 +258,169 @@ export default function SevenView({ character, version }: { character?: Characte
 		if (!kept.length) { setSaved('Nothing left to test there.'); return; }
 		setSaved('Saving...');
 		try {
-			const { created } = await replacePlaylist(name, kept.map(e => ({ ...e, mods: [] })));
-			setSaved(`${created ? 'Created' : 'Updated'} "${name}" with ${kept.length} plays${entries.length > kept.length ? ` (of ${entries.length})` : ''}. Reopen song select to see it.`);
+			const { created } = await replacePlaylist(testName, kept.map(e => ({ ...e, mods: [] })));
+			setSaved(`${created ? 'Created' : 'Updated'} "${testName}" with ${kept.length} plays${entries.length > kept.length ? ` (of ${entries.length})` : ''}. Reopen song select to see it.`);
 		} catch (e) {
 			setSaved(e instanceof Error ? e.message : String(e));
 		}
 	};
 
-	// the hand-picked playlist: one loop of it, every entry its repeats
-	const chosen = measured.filter(row => picked[rowKey(row)]);
-	const loop = chosen.reduce((sum, row) => {
-		const times = picked[rowKey(row)];
-		const seconds = row.map.lengthSec / row.rate * times;
-		const skills = { ...sum.skills };
-		for (const [skill, v] of Object.entries(row.skills)) skills[skill] = (skills[skill] ?? 0) + v * seconds;
-		return {
-			plays: sum.plays + times,
-			seconds: sum.seconds + seconds,
-			xp: sum.xp + row.perSecond * seconds,
-			drift: sum.drift + (row.drift ?? 0) * times,
-			unknownDrift: sum.unknownDrift || row.drift === undefined,
-			skills,
-		};
-	}, { plays: 0, seconds: 0, xp: 0, drift: 0, unknownDrift: false, skills: {} as Record<string, number> });
-	const savePicked = async () => {
-		if (!chosen.length) return;
-		setSaved('Saving...');
-		try {
-			const { created } = await replacePlaylist(pickedName, chosen.map(row => ({ beatmapId: row.map.beatmapId, rate: row.rate, mods: [], repeat: picked[rowKey(row)] })));
-			setSaved(`${created ? 'Created' : 'Updated'} "${pickedName}" with ${chosen.length} maps (${loop.plays} plays a loop). Reopen song select to see it.`);
-		} catch (e) {
-			setSaved(e instanceof Error ? e.message : String(e));
-		}
-	};
-	const shown = pickedOnly ? chosen : measured.slice(0, 200);
+	const listening = recorderStatus.sockets > 0;
+	const statusTitle = [
+		listening ? 'Recording your 7K plays as they finish.' : 'Not connected yet: it starts with your next play.',
+		recorderStatus.lastMessage ? `Last play message ${Math.round((Date.now() - recorderStatus.lastMessage) / 60000)} min ago.` : '',
+		recorderStatus.problem ? `Problem: ${recorderStatus.problem}` : '',
+	].filter(Boolean).join('\n');
 
 	return (
-		<section className="maps target">
-			<div className="target-form">
-				<p className="hint">
-					7K has no sim: every 7K play you make is recorded here as it happens, fails included (the game keeps no failed play),
-					with your levels before it and how tired and warm you started it. Base XP takes out mindblock, fatigue, medals, genetics, mods and your skill multipliers.
-					A map at a rate that gave 0 XP rules out its slower rates; one that failed rules out its faster rates, and every harder map and rate (x1 stars × rate), until a skill levels up. No mods only, for now.
-				</p>
-				{!progress && <p className="empty">No 7K progress found for this character: play 7K once, or pick the character you play it on.</p>}
-				<div className="target-row">
-					<span className="hint" title={recorderStatus.problem || undefined} style={recorderStatus.sockets ? undefined : { color: '#fbbf24' }}>
-						{recorderStatus.sockets ? '● listening' : '○ not connected yet: starts with the next play'}
-						{recorderStatus.lastMessage ? ` · last play message ${Math.round((Date.now() - recorderStatus.lastMessage) / 60000)} min ago` : ''}
-						{recorderStatus.problem ? ` · ⚠ ${recorderStatus.problem}` : ''}
-					</span>
-					<span className="hint">{attempts.length.toLocaleString()} plays recorded · {maps.length.toLocaleString()} 7K maps downloaded · {rates.length} rates</span>
-					<label className="strain-filter" title="Every rate from x0.5 to x1.5, not only the ones your 7K Speed has unlocked">
-						<input type="checkbox" checked={allRates} onChange={e => setAllRates(e.target.checked)} /> All rates
-					</label>
-					<span className="spacer" />
-					<label className="strain-filter" title="Your medals' XP multiplier: the same on every skill, so it changes no ranking, only the numbers">
-						Medals ×
-						<NumberField aria-label="Medal multiplier" min={1} max={100} value={medals}
-							onChange={v => { setMedals(v); try { localStorage.setItem(MEDALS_KEY, String(v)); } catch { /* not kept */ } }} />
-					</label>
-				</div>
-				<p className="why">
-					Screening grid ({screened.map(r => `x${r}`).join(', ')}): {counts.tested.toLocaleString()} tested,{' '}
-					{counts.ruledOut.toLocaleString()} ruled out, {counts.untested.toLocaleString()} left.
-				</p>
-				<div className="target-row">
-					<input aria-label="Playlist name" value={name} onChange={e => setName(e.target.value)} />
-					<label className="strain-filter" title="The most plays one playlist holds">
-						Up to
-						<NumberField aria-label="Most plays" min={1} max={2000} integer value={maxEntries} onChange={setMaxEntries} />
-					</label>
-					<button disabled={!maps.length} onClick={() => void save('x1')} title="Every 7K map not yet tested at x1">Untested at x1</button>
-					<button disabled={!maps.length} onClick={() => void save('screen')} title="Each map at its screening rates not yet tested or ruled out, nearest x1 first">Screening</button>
-					<label className="strain-filter" title="How many of the best measured maps the refining playlist takes">
-						best
-						<NumberField aria-label="Maps to refine" min={1} max={500} integer value={refineMaps} onChange={setRefineMaps} />
-					</label>
-					<button disabled={!measured.length} onClick={() => void save('refine')} title="The best measured maps at the untested rates between the screened rates either side of their best">Refining</button>
-				</div>
-				<div className="target-row">
-					<strong>Your playlist</strong>
-					<input aria-label="Your playlist's name" value={pickedName} onChange={e => setPickedName(e.target.value)} />
-					<span className="hint" title={loop.seconds ? skillBreakdown(Object.fromEntries(Object.entries(loop.skills).map(([k, v]) => [k, v / loop.seconds]))) : undefined}>
-						{chosen.length
-							? <>{chosen.length} maps, {loop.plays} plays a loop · <b>{formatXp(loop.xp / loop.seconds)}</b> base XP/s · drift {loop.drift > 0 ? '+' : ''}{loop.drift.toFixed(1)} strain min a loop{loop.unknownDrift ? ' (some unknown)' : ''}</>
-							: 'Tick rows below to pick maps, and set how many times each repeats.'}
-					</span>
-					<span className="spacer" />
-					<label className="strain-filter"><input type="checkbox" checked={pickedOnly} onChange={e => setPickedOnly(e.target.checked)} /> picked only</label>
-					<button disabled={!chosen.length} onClick={() => setPicked({})}>Clear</button>
-					<button disabled={!chosen.length} onClick={() => void savePicked()} title="Save the ticked rows, each at its repeats, as a playlist">Save playlist</button>
-				</div>
-				{saved && <p className="hint">{saved}</p>}
-			</div>
-			<div className="rows">
-				<div className="row seven head">
-					<span title="Pick for your playlist, and how many times in a row">Pick ×</span><span>Map</span><span className="num">Rate</span><span className="num">Base XP/s</span><span className="num">Best skill</span><span className="num" title="Strain minutes a play adds, start to the next play's start: less than 0 rests">Drift / play</span>
-				</div>
-				{shown.map(row => (
-					<div className="row seven" key={rowKey(row)}>
-						<span className="pick">
-							<input type="checkbox" aria-label="Pick for your playlist" checked={!!picked[rowKey(row)]}
-								onChange={e => { const next = { ...picked }; if (e.target.checked) next[rowKey(row)] = 1; else delete next[rowKey(row)]; setPicked(next); }} />
-							{picked[rowKey(row)] ? (
-								<NumberField aria-label="Repeats" min={1} max={100} integer value={picked[rowKey(row)]}
-									onChange={v => setPicked({ ...picked, [rowKey(row)]: v })} />
-							) : null}
+		<>
+			<header>
+				<h1>7K tracker</h1>
+				<nav className="seg" aria-label="View">
+					<button className={tab === 'playlist' ? 'on' : ''} onClick={() => setTab('playlist')}>
+						Playlist {!!rotation.length && <span className="count">{rotation.length}</span>}
+					</button>
+					<button className={tab === 'maps' ? 'on' : ''} onClick={() => setTab('maps')}>
+						All maps {!!measured.length && <span className="count">{measured.length}</span>}
+					</button>
+					<button className={tab === 'testing' ? 'on' : ''} onClick={() => setTab('testing')}>
+						Testing
+					</button>
+				</nav>
+				<span className="spacer" />
+				<span className="hint" title={statusTitle} style={{ color: recorderStatus.problem ? '#fbbf24' : listening ? '#4ade80' : 'var(--faint, #888)' }}>
+					{listening ? '● recording' : '○ waiting for a play'} · {attempts.length.toLocaleString()} plays
+				</span>
+				<button className="icon" aria-label="Close" onClick={onClose}>✕</button>
+			</header>
+			{saved && <p className="hint seven-saved">{saved}</p>}
+
+			{tab === 'playlist' && (
+				<section className="list seven-list">
+					<div className="list-head">
+						<input aria-label="Playlist name" value={pickedName} onChange={e => setPickedName(e.target.value)} />
+						<span className="hint" title={loop.seconds ? skillBreakdown(Object.fromEntries(Object.entries(loop.skills).map(([k, v]) => [k, v / loop.seconds]))) : undefined}>
+							{rotation.length
+								? <>{rotation.length} maps · {loop.plays} plays · loops every {Math.max(1, Math.round(loop.seconds / 60))} min · <b>{formatXp(loop.xp / loop.seconds)}</b> base XP/s · drift <span style={{ color: driftColor(loop.unknownDrift && !loop.drift ? undefined : loop.drift) }}>{signed(loop.drift)} min</span> a loop{loop.unknownDrift ? ' (some unknown)' : ''}</>
+								: 'Empty: add maps with + in All maps.'}
 						</span>
-						<span className="name" title={`${row.plays} plays, ${row.fails} failed · last ${new Date(row.at).toLocaleString()}`}>
-							{row.map.artist} - {row.map.title} <span className="hint">[{row.map.version}]</span>
-						</span>
-						<span className="num">x{row.rate}</span>
-						<span className="num strong" title={skillBreakdown(row.skills)}>{formatXp(row.perSecond)}</span>
-						<span className="num" title={row.level !== undefined ? `played at level ${row.level}` : undefined}>
-							{row.top ? <>{skillLabel(row.top)} {formatXp(row.topPerSecond)} <span className="hint">{row.level !== undefined ? `Lv ${row.level}` : ''}</span></> : ''}
-						</span>
-						<span className="num" style={{ color: row.drift === undefined ? '#888' : row.drift > 0 ? '#f87171' : '#38bdf8' }}>
-							{row.drift === undefined ? '' : `${row.drift > 0 ? '+' : ''}${row.drift.toFixed(1)} min`}
-						</span>
+						<span className="spacer" />
+						<button disabled={!rotation.length} onClick={() => setPicked({})}>Clear</button>
+						<button className="primary" disabled={!rotation.length} onClick={() => void savePicked()} title="Save these maps, each at its rate and repeats, as a game playlist">Save playlist</button>
 					</div>
-				))}
-				{!measured.length && <p className="empty">No 7K plays recorded yet: play some, then come back.</p>}
-			</div>
-		</section>
+					<div className="rows">
+						<div className="row playlist seven-playlist head">
+							<span /><span>Map</span><span>Plays as</span><span className="num">Base XP/s</span><span className="num" title="Strain minutes a play adds, start to the next play's start: less than 0 rests">Drift</span><span />
+						</div>
+						{rotation.map((row, i) => {
+							const key = rowKey(row);
+							const times = picked[key];
+							return (
+								<div className="row playlist seven-playlist" key={key}>
+									<span className="num muted">{i + 1}</span>
+									<MapName map={row.map} rate={row.rate} />
+									<span className="chips">
+										<span className="chip">x{row.rate}</span>
+										<span className="stepper" title="Times in a row">
+											<button aria-label="Fewer times" disabled={times <= 1} onClick={() => setPicked({ ...picked, [key]: times - 1 })}>−</button>
+											<NumberField aria-label="Times in a row" min={1} max={MAX_REPEAT} integer value={times} onChange={v => setPicked({ ...picked, [key]: v })} />
+											<button aria-label="More times" disabled={times >= MAX_REPEAT} onClick={() => setPicked({ ...picked, [key]: times + 1 })}>+</button>
+										</span>
+									</span>
+									<span className="num strong" title={skillBreakdown(row.skills)}>{formatXp(row.perSecond)}</span>
+									<span className="num" style={{ color: driftColor(row.drift) }}>{row.drift === undefined ? '–' : `${signed(row.drift)}m`}</span>
+									<button className="icon" aria-label="Remove from the playlist" title="Remove" onClick={() => toggle(key)}>✕</button>
+								</div>
+							);
+						})}
+						{!rotation.length && <p className="empty">No maps yet. Open All maps and press + on the ones you want; set how many times each repeats here.</p>}
+					</div>
+				</section>
+			)}
+
+			{tab === 'maps' && (
+				<section className="maps">
+					<div className="maps-tools">
+						<input type="search" aria-label="Search maps" placeholder="Search title, artist, difficulty" value={query} onChange={e => setQuery(e.target.value)} />
+						<div className="seg" role="group" aria-label="Drift filter">
+							<button className={driftFilter === 'all' ? 'on' : ''} onClick={() => setDriftFilter('all')}>All</button>
+							<button className={driftFilter === 'warm' ? 'on' : ''} onClick={() => setDriftFilter('warm')} title="Plays that add strain (drift > 0)">Top warming</button>
+							<button className={driftFilter === 'cool' ? 'on' : ''} onClick={() => setDriftFilter('cool')} title="Plays that let you rest (drift ≤ 0)">Top cooling</button>
+						</div>
+						<div className="seg" role="group" aria-label="Rates listed">
+							<button className={everyRate ? '' : 'on'} onClick={() => setEveryRate(false)} title="Each difficulty once, at its best rate">Best</button>
+							<button className={everyRate ? 'on' : ''} onClick={() => setEveryRate(true)} title="Every rate you have passed of each difficulty">Every rate</button>
+						</div>
+						<span className="spacer" />
+						<span className="hint">Base XP/s from your last pass at each rate</span>
+					</div>
+					<div className="rows">
+						<div className="row seven-maps head">
+							<span /><span>Map</span><span>Rate</span><span className="num">Base XP/s</span><span className="num">Best skill</span><span className="num" title="Strain minutes a play adds, start to the next play's start: less than 0 rests">Drift</span><span className="num">Plays</span>
+						</div>
+						{listed.map(row => {
+							const key = rowKey(row);
+							const on = !!picked[key];
+							return (
+								<div className={`row seven-maps${on ? ' picked' : ''}`} key={key}>
+									<button className={`icon add${on ? ' on' : ''}`} aria-pressed={on} title={on ? 'In your playlist: press to take it out' : 'Add to your playlist'} onClick={() => toggle(key)}>{on ? '✓' : '+'}</button>
+									<MapName map={row.map} rate={row.rate} />
+									<span className="chips"><span className="chip">x{row.rate}</span></span>
+									<span className="num strong" title={skillBreakdown(row.skills)}>{formatXp(row.perSecond)}</span>
+									<span className="num" title={row.level !== undefined ? `played at level ${row.level}` : undefined}>
+										{row.top ? <>{skillLabel(row.top)} <span className="muted">Lv {row.level ?? '?'}</span></> : ''}
+									</span>
+									<span className="num" style={{ color: driftColor(row.drift) }}>{row.drift === undefined ? '–' : `${signed(row.drift)}m`}</span>
+									<span className="num muted" title={`last played ${new Date(row.at).toLocaleString()}`}>{row.plays}{row.fails ? ` (${row.fails}✗)` : ''}</span>
+								</div>
+							);
+						})}
+						{!listed.length && <p className="empty">{measured.length ? 'Nothing matches.' : 'No 7K plays recorded yet: play some (the Testing tab makes playlists for it), then come back.'}</p>}
+					</div>
+				</section>
+			)}
+
+			{tab === 'testing' && (
+				<section className="maps target">
+					<div className="target-form">
+						<p className="hint">
+							Every 7K play is recorded as it finishes, fails included. Base XP leaves out every multiplier (mindblock, fatigue, medals, genes, mods,
+							upgrades), so maps compare fairly. To save plays, some are skipped: a rate that gave 0 XP skips the map&apos;s slower rates, and a fail skips
+							its faster rates and every harder map (x1 stars × rate) until any skill levels up.
+						</p>
+						<div className="target-row">
+							<span className="hint">{maps.length.toLocaleString()} 7K maps downloaded · {rates.length} rates{progress ? '' : ' (your 7K Speed could not be read)'}</span>
+							<label className="strain-filter" title="Every rate from x0.5 to x1.5, not only the ones your 7K Speed has unlocked">
+								<input type="checkbox" checked={allRates} onChange={e => setAllRates(e.target.checked)} /> All rates
+							</label>
+							<span className="spacer" />
+							<label className="strain-filter" title="Your medals' XP multiplier, from the Character screen: the same on every skill, so it changes no ranking, only the numbers">
+								Medals ×
+								<NumberField aria-label="Medal multiplier" min={1} max={100} value={medals}
+									onChange={v => { setMedals(v); try { localStorage.setItem(MEDALS_KEY, String(v)); } catch { /* not kept */ } }} />
+							</label>
+						</div>
+						<p className="why">
+							Screening rates {screened.map(r => `x${r}`).join(', ')}: <b>{counts.untested.toLocaleString()}</b> map and rate pairs left to test,{' '}
+							{counts.tested.toLocaleString()} tested, {counts.ruledOut.toLocaleString()} skipped.
+						</p>
+						<div className="target-row">
+							<input aria-label="Test playlist name" value={testName} onChange={e => setTestName(e.target.value)} />
+							<label className="strain-filter" title="The most plays one playlist holds">
+								Up to
+								<NumberField aria-label="Most plays" min={1} max={2000} integer value={maxEntries} onChange={setMaxEntries} />
+							</label>
+							<button disabled={!maps.length} onClick={() => void saveTests('x1')} title="Every 7K map not yet tested at x1">Untested at x1</button>
+							<button disabled={!maps.length} onClick={() => void saveTests('screen')} title="Each map at its screening rates not yet tested or skipped, nearest x1 first">Screening</button>
+							<label className="strain-filter" title="How many of the best measured maps the refining playlist takes">
+								best
+								<NumberField aria-label="Maps to refine" min={1} max={500} integer value={refineMaps} onChange={setRefineMaps} />
+							</label>
+							<button disabled={!measured.length} onClick={() => void saveTests('refine')} title="The best measured maps at the untested rates between the screening rates either side of their best">Refining</button>
+						</div>
+					</div>
+				</section>
+			)}
+		</>
 	);
 }
