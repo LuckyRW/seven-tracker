@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react';
 import { beatmapStore, gameCharacter, type CharacterRow } from '@oss-idle/addon-sdk';
 import { modsKey, parseMods, type Mod } from '@oss-idle/shared/mods';
 import { allowedRate } from '@oss-idle/shared/rate';
-import { attemptsOf, baseOf, progress7k, RULESET_7K, statusOf, testsOf, type RateStatus } from '../engine/seven.js';
+import { attemptsOf, baseOf, failCeiling, progress7k, RULESET_7K, statusOf, testsOf, type RateStatus } from '../engine/seven.js';
 import { formatXp, skillBreakdown, skillLabel } from './parts.js';
 
 /** The ruleset the player picked, as the game's add-on host says it. */
@@ -68,9 +68,13 @@ export default function SevenBox({ version }: { version: number }) {
 	const [lengths, setLengths] = useState<Map<number, number>>(new Map());
 	const pickedKey = picked && `${picked.beatmapId}@${picked.rate}@${picked.mods}`;
 
+	const [stars, setStars] = useState<Map<number, number>>(new Map());
 	useEffect(() => {
 		void beatmapStore.difficulties()
-			.then(list => setLengths(new Map(list.map(({ version: v }) => [v.id, v.total_length / 1000]))))
+			.then(list => {
+				setLengths(new Map(list.map(({ version: v }) => [v.id, v.total_length / 1000])));
+				setStars(new Map(list.map(({ version: v }) => [v.id, v.difficulty])));
+			})
 			.catch(() => undefined);
 	}, []);
 
@@ -104,13 +108,15 @@ export default function SevenBox({ version }: { version: number }) {
 			if (gone) return;
 			setSpeed(progress?.speedUpgrades ?? 0);
 			const all = attemptsOf(Number(character.id)).sort((a, b) => a.startedAt - b.startedAt);
-			const tests = testsOf(all, progress?.levelSum ?? 0).get(`${picked.beatmapId}|${picked.mods}`);
-			setStatus(statusOf(tests, picked.rate));
+			const levelSum = progress?.levelSum ?? 0;
+			const tests = testsOf(all, levelSum).get(`${picked.beatmapId}|${picked.mods}`);
+			const own = stars.get(picked.beatmapId);
+			setStatus(statusOf(tests, picked.rate, own ? own * picked.rate : undefined, failCeiling(all, levelSum, id => stars.get(id))));
 			const last = tests?.byRate.get(picked.rate)?.filter(a => !a.failed).at(-1);
 			setPlay(last ? { playedAt: last.startedAt, base: baseOf(last, all), seconds: length / last.rate, levels: last.levels } : null);
 		});
 		return () => { gone = true; };
-	}, [pickedKey, character?.id, lengths, version]);
+	}, [pickedKey, character?.id, lengths, stars, version]);
 
 	if (!picked || play === undefined) return null;
 	const label = `x${picked.rate}${picked.mods ? ` +${picked.mods.replace(/,/g, '')}` : ''}`;

@@ -365,11 +365,31 @@ export const testsOf = (attempts: readonly Attempt[], levelSum: number): Map<str
 	return out;
 };
 
-export const statusOf = (t: MapTests | undefined, rate: number): RateStatus => {
+/**
+ * The hardest a play may be, as its x1 stars × rate, before a fail rules it out: the easiest
+ * play failed since the last level-up, of any map. Infinity when none has failed since.
+ * Stars × rate stands in for the stars at that rate, which only the server knows.
+ */
+export const failCeiling = (attempts: readonly Attempt[], levelSum: number, starsOf: (beatmapId: number) => number | undefined): number => {
+	let ceiling = Infinity;
+	for (const a of attempts) {
+		if (!a.failed || a.levelSum < levelSum) continue;
+		const stars = starsOf(a.beatmapId);
+		if (stars) ceiling = Math.min(ceiling, stars * a.rate);
+	}
+	return ceiling;
+};
+
+/**
+ * Where a map stands at a rate. With `hardness` (its x1 stars × rate) and the `ceiling` of
+ * {@link failCeiling}, anything harder than a play failed since the last level-up is too hard.
+ */
+export const statusOf = (t: MapTests | undefined, rate: number, hardness?: number, ceiling = Infinity): RateStatus => {
 	const here = t?.byRate.get(rate);
 	if (here?.some(a => !a.failed)) return 'tested';
 	if (t?.easyAt !== undefined && rate < t.easyAt) return 'too easy';
 	if (t?.hardAt !== undefined && rate > t.hardAt) return 'too hard';
+	if (hardness !== undefined && hardness > ceiling + 1e-9) return 'too hard';
 	if (here?.length) return 'failed';
 	return 'untested';
 };

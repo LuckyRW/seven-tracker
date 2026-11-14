@@ -68,6 +68,19 @@ check('after a level-up the faster rates open again', m.statusOf(m.testsOf(plays
 check('the screening grid: every third, x1 and the fastest',
 	m.screenRates([0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1, 1.05, 1.1]).join() === '0.5,0.65,0.8,0.95,1,1.1');
 
+// a fail rules out every harder map and rate (x1 stars x rate) until a skill levels up
+{
+	const stars = new Map([[1, 2.0], [2, 3.0], [3, 2.5]]);
+	const failed = { beatmapId: 2, rate: 1, mods: '', failed: true, gains: {}, levelSum: 10 };
+	const ceiling = m.failCeiling([failed], 10, id => stars.get(id));
+	check('fail ceiling is the failed play stars x rate', near(ceiling, 3));
+	check('a harder map is ruled out', m.statusOf(undefined, 1.3, 2.5 * 1.3, ceiling) === 'too hard');
+	check('an easier map stays open', m.statusOf(undefined, 1, 2.5, ceiling) === 'untested');
+	check('the failed play itself shows failed', m.statusOf(m.testsOf([failed], 10).get('2|'), 1, 3, ceiling) === 'failed');
+	check('a level-up lifts the ceiling', m.failCeiling([failed], 11, id => stars.get(id)) === Infinity);
+	check('a passed harder play stays tested', m.statusOf(m.testsOf([{ ...failed, beatmapId: 1, rate: 2, failed: false, gains: { speed: 5 } }], 10).get('1|'), 2, 4, ceiling) === 'tested');
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;

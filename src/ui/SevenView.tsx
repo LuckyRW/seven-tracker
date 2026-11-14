@@ -8,7 +8,7 @@ import { beatmapStore, type CharacterRow } from '@oss-idle/addon-sdk';
 import { rateSteps } from '@oss-idle/shared/rate';
 import { replacePlaylist } from '../engine/playlist.js';
 import {
-	attemptsOf, baseOf, MEDALS_KEY, medals7k, progress7k, readAttempts, recorderStatus, screenRates, statusOf, testsOf, totalOf,
+	attemptsOf, baseOf, failCeiling, MEDALS_KEY, medals7k, progress7k, readAttempts, recorderStatus, screenRates, statusOf, testsOf, totalOf,
 	type Attempt, type Progress7k,
 } from '../engine/seven.js';
 import { formatXp, NumberField, skillBreakdown, skillLabel } from './parts.js';
@@ -79,6 +79,9 @@ export default function SevenView({ character, version }: { character?: Characte
 	const rates = useMemo(() => rateSteps(progress?.speedUpgrades ?? 0), [progress?.speedUpgrades]);
 	const screened = useMemo(() => screenRates(rates), [rates]);
 	const tests = useMemo(() => testsOf(attempts, progress?.levelSum ?? 0), [attempts, progress?.levelSum]);
+	// a fail rules out every harder map and rate too, until a skill levels up
+	const ceiling = useMemo(() => failCeiling(attempts, progress?.levelSum ?? 0, id => byId.get(id)?.difficulty), [attempts, progress?.levelSum, byId]);
+	const statusAt = (m: Map7k, rate: number) => statusOf(tests.get(`${m.beatmapId}|`), rate, m.difficulty * rate, ceiling);
 
 	const measured = useMemo(() => {
 		const rows: Measured[] = [];
@@ -121,18 +124,19 @@ export default function SevenView({ character, version }: { character?: Characte
 		let untested = 0, ruledOut = 0, tested = 0;
 		for (const m of maps) {
 			for (const rate of screened) {
-				const s = statusOf(tests.get(`${m.beatmapId}|`), rate);
+				const s = statusAt(m, rate);
 				if (s === 'untested') untested++;
 				else if (s === 'too easy' || s === 'too hard') ruledOut++;
 				else tested++;
 			}
 		}
 		return { untested, ruledOut, tested };
-	}, [maps, screened, tests]);
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [maps, screened, tests, ceiling]);
 
 	const save = async (kind: 'x1' | 'screen' | 'refine') => {
 		const entries: { beatmapId: number; rate: number }[] = [];
-		const open = (id: number, rate: number) => statusOf(tests.get(`${id}|`), rate) === 'untested';
+		const open = (id: number, rate: number) => { const m = byId.get(id); return !!m && statusAt(m, rate) === 'untested'; };
 		if (kind === 'x1') {
 			for (const m of maps) if (rates.includes(1) && open(m.beatmapId, 1)) entries.push({ beatmapId: m.beatmapId, rate: 1 });
 		} else if (kind === 'screen') {
@@ -197,7 +201,7 @@ export default function SevenView({ character, version }: { character?: Characte
 				<p className="hint">
 					7K has no sim: every 7K play you make is recorded here as it happens, fails included (the game keeps no failed play),
 					with your levels before it and how tired and warm you started it. Base XP takes out mindblock, fatigue, medals, genetics, mods and your skill multipliers.
-					A map at a rate that gave 0 XP rules out its slower rates; one that failed rules out its faster rates until a skill levels up. No mods only, for now.
+					A map at a rate that gave 0 XP rules out its slower rates; one that failed rules out its faster rates, and every harder map and rate (x1 stars × rate), until a skill levels up. No mods only, for now.
 				</p>
 				{!progress && <p className="empty">No 7K progress found for this character: play 7K once, or pick the character you play it on.</p>}
 				<div className="target-row">
