@@ -81,6 +81,16 @@ check('the screening grid: every third, x1 and the fastest',
 	check('a passed harder play stays tested', m.statusOf(m.testsOf([{ ...failed, beatmapId: 1, rate: 2, failed: false, gains: { speed: 5 } }], 10).get('1|'), 2, 4, ceiling) === 'tested');
 }
 
+// an account character's 7K progress comes from the server's character message, not the table
+{
+	const kept = m.noteCharacter({ id: 63, ruleset: 'mania7k', skills: { speed: { level: 12, xp: 5, upgrades: 1, overdrive: 1, prestige: 1 }, jacks: { level: 5, xp: 0, upgrades: 0, overdrive: 0, prestige: 0 } } });
+	check('a 7K character message is kept', kept === true);
+	check('a 4K one is not', m.noteCharacter({ id: 63, ruleset: 'mania4k', skills: {} }) === false);
+	const p = await m.progress7k(63);
+	check('progress reads the sent character', p?.levels.speed === 12 && p?.levels.jacks === 5, JSON.stringify(p?.levels));
+	check('speed unlocks count upgrades and prestige', p?.speedUpgrades === 2);
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;

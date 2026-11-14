@@ -97,12 +97,42 @@ export type Progress7k = {
 };
 
 type Row = Record<string, number | string>;
+/** The 7K character the server last sent (`character` on the game's socket: on connecting, and
+ *  whenever it changes), kept so the progress is known before the next one comes. */
+const SENT_KEY = 'seven-tracker:character';
+type SentSkill = { level: number; xp: number; upgrades: number; overdrive: number; prestige: number };
+type Sent = { id: number; skills: Record<string, SentSkill>; genetics?: unknown; at: number };
+
+/** Keep a `character` message's character when it is in 7K. */
+export const noteCharacter = (dto: { id?: number; ruleset?: string; skills?: Record<string, SentSkill>; genetics?: unknown } | undefined): boolean => {
+	if (!dto || dto.ruleset !== RULESET_7K || !dto.id || !dto.skills) return false;
+	try { localStorage.setItem(SENT_KEY, JSON.stringify({ id: dto.id, skills: dto.skills, genetics: dto.genetics, at: Date.now() } satisfies Sent)); } catch { return false; }
+	return true;
+};
+
+/** The sent character as the table's columns, when it is this character's. */
+const sentRow = (characterId: number): Row | undefined => {
+	let sent: Sent | undefined;
+	try { sent = JSON.parse(localStorage.getItem(SENT_KEY) ?? 'null') ?? undefined; } catch { return undefined; }
+	if (!sent || sent.id !== characterId) return undefined;
+	const row: Row = { characterId, geneticsJson: sent.genetics ? JSON.stringify(sent.genetics) : '' };
+	for (const [skill, p] of Object.entries(sent.skills)) {
+		row[skill] = p.level; row[`${skill}XP`] = p.xp; row[`${skill}Upgrades`] = p.upgrades;
+		row[`${skill}Overdrive`] = p.overdrive; row[`${skill}Prestige`] = p.prestige;
+	}
+	return row;
+};
+
 /**
  * The character's row of `character_mania7k`. The game keys it on `characterId`, but a
  * database made by an earlier beta can lack that column ("no such column: characterId"):
  * then it is read by whichever key the table has, or as its only row.
  */
 const progressRow = async (characterId: number): Promise<Row | undefined> => {
+	// an account character's 7K progress is never written to the table (only a guest's is): what
+	// the server last sent over the socket comes first
+	const sent = sentRow(characterId);
+	if (sent) return sent;
 	const byKey = (key: string) => gameDb.first<Row>(`SELECT * FROM character_mania7k WHERE ${key} = ?`, [characterId]);
 	try { return await byKey('characterId') ?? undefined; } catch { /* no such column */ }
 	try {
@@ -252,7 +282,20 @@ export const recordPlays = (
 		};
 	};
 	const onMessage = (e: MessageEvent) => {
-		if (typeof e.data !== 'string' || !e.data.includes('"play:')) return;
+		if (typeof e.data !== 'string') return;
+		// the character as the server has it: 7K's levels, upgrades, overdrive and genes
+		if (e.data.includes('"type":"character"')) {
+			try {
+				const msg = JSON.parse(e.data) as { type?: string; character?: Parameters<typeof noteCharacter>[0] };
+				if (msg.type === 'character' && noteCharacter(msg.character)) {
+					console.info('[7K tracker] 7K character received');
+					if (recorderStatus.problem.startsWith('no 7K progress')) recorderStatus.problem = '';
+					onAttempt();
+				}
+			} catch { /* not JSON */ }
+			return;
+		}
+		if (!e.data.includes('"play:')) return;
 		let msg: { type?: string; token?: string; result?: Record<string, unknown> };
 		try { msg = JSON.parse(e.data); } catch { return; }
 		recorderStatus.lastMessage = Date.now();
@@ -339,10 +382,22 @@ export const recordPlays = (
 	};
 	arm();
 	const timer = setInterval(arm, 3000);
+	// a socket opened from now on (a reconnect, a switch of ruleset) is hooked as it is made, so the
+	// server's first messages (the character among them) are heard too
+	const Original = globalThis.WebSocket;
+	const Watched = function (this: unknown, ...args: ConstructorParameters<typeof WebSocket>) {
+		const ws = new Original(...args);
+		hook(ws);
+		return ws;
+	} as unknown as typeof WebSocket;
+	Watched.prototype = Original.prototype;
+	Object.assign(Watched, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });
+	globalThis.WebSocket = Watched;
 	(globalThis as { sevenTracker?: unknown }).sevenTracker = recorderStatus;
 	return () => {
 		clearInterval(timer);
 		if (proto.send === ours) proto.send = original;
+		if (globalThis.WebSocket === Watched) globalThis.WebSocket = Original;
 	};
 };
 
