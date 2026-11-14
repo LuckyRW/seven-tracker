@@ -7,7 +7,7 @@
  * the game's own settings in localStorage.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { beatmapStore, gameCharacter, type CharacterRow } from '@oss-idle/addon-sdk';
 import { modsKey, parseMods, type Mod } from '@oss-idle/shared/mods';
 import { allowedRate } from '@oss-idle/shared/rate';
@@ -59,7 +59,41 @@ const ago = (ms: number) => {
 
 type Shown = { playedAt: number; base: Record<string, number>; seconds: number; levels: Record<string, number> };
 
+/** Where the box was dragged to, kept across restarts; unset, it sits at the left, halfway down. */
+const POS_KEY = 'seven-tracker:box-pos';
+type Pos = { left: number; top: number };
+const readPos = (): Pos | undefined => {
+	try { const p = JSON.parse(localStorage.getItem(POS_KEY) ?? 'null') as Pos | null; return p && Number.isFinite(p.left) && Number.isFinite(p.top) ? p : undefined; } catch { return undefined; }
+};
+/** Kept on screen, however the window was resized since. */
+const onScreen = (p: Pos, el: HTMLElement | null): Pos => {
+	const w = el?.offsetWidth ?? 200, h = el?.offsetHeight ?? 100;
+	return { left: Math.max(0, Math.min(window.innerWidth - w, p.left)), top: Math.max(0, Math.min(window.innerHeight - h, p.top)) };
+};
+
 export default function SevenBox({ version }: { version: number }) {
+	const [pos, setPos] = useState<Pos | undefined>(readPos);
+	const boxRef = useRef<HTMLDivElement>(null);
+	const drag = useRef<{ dx: number; dy: number } | undefined>(undefined);
+	const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+		const r = e.currentTarget.getBoundingClientRect();
+		drag.current = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+		e.currentTarget.setPointerCapture(e.pointerId);
+		e.preventDefault();
+	};
+	const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+		if (!drag.current) return;
+		setPos(onScreen({ left: e.clientX - drag.current.dx, top: e.clientY - drag.current.dy }, boxRef.current));
+	};
+	const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+		if (!drag.current) return;
+		drag.current = undefined;
+		try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* released */ }
+		const r = e.currentTarget.getBoundingClientRect();
+		const kept = { left: r.left, top: r.top };
+		setPos(kept);
+		try { localStorage.setItem(POS_KEY, JSON.stringify(kept)); } catch { /* not kept */ }
+	};
 	const [character, setCharacter] = useState<CharacterRow>();
 	const [picked, setPicked] = useState<Picked>();
 	const [play, setPlay] = useState<Shown | null>();
@@ -124,7 +158,12 @@ export default function SevenBox({ version }: { version: number }) {
 	const total = skills.reduce((sum, [, xp]) => sum + xp, 0);
 
 	return (
-		<div className="last-play" role="status" aria-label="Last 7K play at this rate">
+		<div
+			ref={boxRef} className="last-play draggable" role="status" aria-label="Last 7K play at this rate" title="Drag to move"
+			style={pos ? { ...onScreen(pos, boxRef.current), transform: 'none' } : undefined}
+			onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
+			onDoubleClick={() => { setPos(undefined); try { localStorage.removeItem(POS_KEY); } catch { /* not kept */ } }}
+		>
 			<div className="last-play__head">7K · Last play at {label}</div>
 			{status && status !== 'tested' && (
 				<div className="last-play__none" style={{ color: status === 'untested' ? '#fbbf24' : '#888' }}>

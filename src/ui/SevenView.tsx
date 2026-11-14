@@ -28,7 +28,7 @@ type Measured = {
 	at: number;
 	plays: number;
 	fails: number;
-	/** mean warm-up bar change per play, start to the next play's start */
+	/** mean strain minutes added per play, start to the next play's start (less than 0 rests) */
 	drift?: number;
 };
 
@@ -97,19 +97,21 @@ export default function SevenView({ character, version }: { character?: Characte
 		// the warm-up bar at every 7K play's start, fails and unrecorded plays included, and the
 		// recorded plays' own: the bar a play left behind is the next start's
 		const id = Number(character?.id);
+		// drift in strain minutes, as the game's API counts them at each start: the same minute
+		// anywhere on the warm-up bar, which stretches some stretches of it many times over others
 		const marks = [
-			...readBars().filter(m => m.characterId === id).map(m => ({ at: m.at, bar: m.bar })),
-			...ordered.filter(a => a.bar !== undefined).map(a => ({ at: a.startedAt, bar: a.bar as number })),
+			...readBars().filter(m => m.characterId === id && m.minutes !== undefined).map(m => ({ at: m.at, minutes: m.minutes as number })),
+			...ordered.filter(a => a.minutes !== undefined).map(a => ({ at: a.startedAt, minutes: a.minutes as number })),
 		].sort((a, b) => a.at - b.at);
 		const drifts = new Map<string, number[]>();
 		for (const a of ordered) {
 			const map = byId.get(a.beatmapId);
-			if (!map || a.bar === undefined) continue;
+			if (!map || a.minutes === undefined) continue;
 			const next = marks.find(m => m.at > a.startedAt + 1000);
 			// the next play started soon after: the change is this play's, and the wait after it
 			if (!next || next.at - a.startedAt > (map.lengthSec / a.rate + 600) * 1000) continue;
 			const key = `${a.beatmapId}@${a.rate}@${a.mods}`;
-			drifts.set(key, [...drifts.get(key) ?? [], next.bar - a.bar]);
+			drifts.set(key, [...drifts.get(key) ?? [], next.minutes - a.minutes]);
 		}
 		for (const [key, t] of tests) {
 			const [id, mods] = key.split('|');
@@ -259,7 +261,7 @@ export default function SevenView({ character, version }: { character?: Characte
 					<input aria-label="Your playlist's name" value={pickedName} onChange={e => setPickedName(e.target.value)} />
 					<span className="hint" title={loop.seconds ? skillBreakdown(Object.fromEntries(Object.entries(loop.skills).map(([k, v]) => [k, v / loop.seconds]))) : undefined}>
 						{chosen.length
-							? <>{chosen.length} maps, {loop.plays} plays a loop · <b>{formatXp(loop.xp / loop.seconds)}</b> base XP/s · drift {loop.drift > 0 ? '+' : ''}{(loop.drift * 100).toFixed(1)}% a loop{loop.unknownDrift ? ' (some unknown)' : ''}</>
+							? <>{chosen.length} maps, {loop.plays} plays a loop · <b>{formatXp(loop.xp / loop.seconds)}</b> base XP/s · drift {loop.drift > 0 ? '+' : ''}{loop.drift.toFixed(1)} strain min a loop{loop.unknownDrift ? ' (some unknown)' : ''}</>
 							: 'Tick rows below to pick maps, and set how many times each repeats.'}
 					</span>
 					<span className="spacer" />
@@ -271,7 +273,7 @@ export default function SevenView({ character, version }: { character?: Characte
 			</div>
 			<div className="rows">
 				<div className="row seven head">
-					<span title="Pick for your playlist, and how many times in a row">Pick ×</span><span>Map</span><span className="num">Rate</span><span className="num">Base XP/s</span><span className="num">Best skill</span><span className="num">Drift / play</span>
+					<span title="Pick for your playlist, and how many times in a row">Pick ×</span><span>Map</span><span className="num">Rate</span><span className="num">Base XP/s</span><span className="num">Best skill</span><span className="num" title="Strain minutes a play adds, start to the next play's start: less than 0 rests">Drift / play</span>
 				</div>
 				{shown.map(row => (
 					<div className="row seven" key={rowKey(row)}>
@@ -292,7 +294,7 @@ export default function SevenView({ character, version }: { character?: Characte
 							{row.top ? <>{skillLabel(row.top)} {formatXp(row.topPerSecond)} <span className="hint">{row.level !== undefined ? `Lv ${row.level}` : ''}</span></> : ''}
 						</span>
 						<span className="num" style={{ color: row.drift === undefined ? '#888' : row.drift > 0 ? '#f87171' : '#38bdf8' }}>
-							{row.drift === undefined ? '' : `${row.drift > 0 ? '+' : ''}${(row.drift * 100).toFixed(1)}%`}
+							{row.drift === undefined ? '' : `${row.drift > 0 ? '+' : ''}${row.drift.toFixed(1)} min`}
 						</span>
 					</div>
 				))}

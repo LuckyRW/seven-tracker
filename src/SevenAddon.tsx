@@ -42,7 +42,20 @@ export class SevenAddon extends ReactAddon {
 		void whose();
 		const timer = setInterval(() => void whose(), 10_000);
 		this.own(() => clearInterval(timer));
-		this.own(recordPlays(() => this.character?.id, () => { this.version++; this.refresh(); }));
+		this.own(recordPlays(() => this.character?.id, () => { this.version++; this.refresh(); }, () => this.strainNow()));
+	}
+
+	/** The strain minutes the server has for the signed-in character (the API's /me fatigue.minutes). */
+	private async strainNow(): Promise<number | undefined> {
+		const api = (this.host as { api?: { me(): Promise<unknown> } } | undefined)?.api;
+		if (!api) return undefined;
+		try {
+			const me = await api.me() as { fatigue?: { minutes?: unknown } };
+			const minutes = Number(me?.fatigue?.minutes);
+			return Number.isFinite(minutes) ? minutes : undefined;
+		} catch {
+			return undefined;
+		}
 	}
 
 	private toggle(): void {

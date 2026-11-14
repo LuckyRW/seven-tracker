@@ -146,6 +146,8 @@ export type Attempt = {
 	fatigue: number;
 	/** the warm-up bar at the start, 0 cold to 1 exhausted */
 	bar?: number;
+	/** strain minutes at its start, as the game's API had them */
+	minutes?: number;
 	failed: boolean;
 	/** XP given, per skill */
 	gains: Record<string, number>;
@@ -181,7 +183,7 @@ export const medals7k = (): number => {
 
 /** The warm-up bar at a 7K play's start: every start is noted, fails and unrecorded plays
  *  included, so drift (one start's bar to the next's) is not broken by a play that was not kept. */
-export type BarMark = { token: string; at: number; bar: number; characterId: number };
+export type BarMark = { token: string; at: number; bar?: number; characterId: number; /** strain minutes at the start (the API's fatigue.minutes) */ minutes?: number };
 const BARS_KEY = 'seven-tracker:bars';
 const MAX_BARS = 6000;
 export const readBars = (): BarMark[] => {
@@ -197,7 +199,7 @@ const noteBar = (mark: BarMark) => {
 /** Skills only 7K has: a result gaining any of them is a 7K play's. */
 const ONLY_7K = new Set(['jacks', 'independence', 'ln', 'technical', 'focus', 'sv']);
 
-type Started = { characterId: number; beatmapId: number; rate: number; mods: string; startedAt: number; fatigue: number; bar?: number; progress?: Progress7k };
+type Started = { characterId: number; beatmapId: number; rate: number; mods: string; startedAt: number; fatigue: number; bar?: number; minutes?: number; progress?: Progress7k };
 
 /** What the recorder has seen, for the 7K tab to show. */
 export const recorderStatus = {
@@ -215,7 +217,12 @@ export const recorderStatus = {
  * Record 7K plays off the game's socket. `characterId` names whose plays these are.
  * Returns what stops it.
  */
-export const recordPlays = (characterId: () => number | undefined, onAttempt: () => void): (() => void) => {
+export const recordPlays = (
+	characterId: () => number | undefined,
+	onAttempt: () => void,
+	/** the signed-in character's strain minutes now (the API's fatigue.minutes), when it can be asked */
+	strainNow: () => Promise<number | undefined> = async () => undefined,
+): (() => void) => {
 	const started = new Map<string, Started>();
 	const done = new Set<string>();
 	const hooked = new WeakSet<WebSocket>();
@@ -256,7 +263,11 @@ export const recordPlays = (characterId: () => number | undefined, onAttempt: ()
 			const id = characterId() ?? lastId;
 			if (id === undefined) { recorderStatus.problem = 'a 7K play started before the character was known'; console.warn('[7K tracker] 7K play not recorded: no character yet'); return; }
 			lastId = id;
-			if (r.warmupBar !== undefined) noteBar({ token: r.token, at: Date.now(), bar: r.warmupBar, characterId: id });
+			const at = Date.now();
+			void strainNow().catch(() => undefined).then(minutes => {
+				if (minutes !== undefined) play.minutes = minutes;
+				if (minutes !== undefined || r.warmupBar !== undefined) noteBar({ token: r.token, at, bar: r.warmupBar, minutes, characterId: id });
+			});
 			const play: Started = { characterId: id, beatmapId: r.beatmapId, rate: r.rate, mods: modsKey(r.mods ?? []), startedAt: Date.now(), fatigue: r.fatigue ?? 0, bar: r.warmupBar };
 			started.set(r.token, play);
 			recorderStatus.waiting = started.size;

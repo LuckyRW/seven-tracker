@@ -577,3 +577,7 @@ header {
 .row.seven .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row.seven .pick { display: flex; align-items: center; gap: 4px; }
 .row.seven .pick input[type="text"] { width: 40px; }
+
+/* the 7K box can be dragged out of the way (double-click puts it back) */
+.last-play.draggable { pointer-events: auto; cursor: grab; user-select: none; touch-action: none; }
+.last-play.draggable:active { cursor: grabbing; }
