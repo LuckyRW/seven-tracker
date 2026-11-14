@@ -1,0 +1,147 @@
+/**
+ * A small box at the left of 7K song select: the selected difficulty's last
+ * recorded play at the rate and mods picked, in base XP per second, the levels it
+ * was played at, and whether the rate is still worth testing. It reads the
+ * selection off the song select cards (the active one carries its difficulty's
+ * id, and a playlist lock its rate and mods) and the picked rate and mods from
+ * the game's own settings in localStorage.
+ */
+
+import { useEffect, useState } from 'react';
+import { beatmapStore, gameCharacter, type CharacterRow } from '@oss-idle/addon-sdk';
+import { modsKey, parseMods, type Mod } from '@oss-idle/shared/mods';
+import { allowedRate } from '@oss-idle/shared/rate';
+import { attemptsOf, baseOf, progress7k, RULESET_7K, statusOf, testsOf, type RateStatus } from '../engine/seven.js';
+import { formatXp, skillBreakdown, skillLabel } from './parts.js';
+
+/** The ruleset the player picked, as the game's add-on host says it. */
+const ruleset = (): string => {
+	try { return (globalThis as { ossIdle?: { ruleset?: { current?: () => string } } }).ossIdle?.ruleset?.current?.() ?? 'mania4k'; } catch { return 'mania4k'; }
+};
+
+const SELECTION_MS = 300;
+const CHARACTER_MS = 3000;
+
+const stored = <T,>(key: string, fallback: T): T => {
+	try {
+		const value = localStorage.getItem(key);
+		return value === null ? fallback : JSON.parse(value) as T;
+	} catch {
+		return fallback;
+	}
+};
+
+type Picked = { beatmapId: number; rate: number; mods: string };
+
+/** The selected difficulty, with the rate and mods it would play at. */
+const selection = (speedUpgrades: number): Picked | undefined => {
+	const card = document.querySelector<HTMLElement>('.bm-card.is-active[data-id]');
+	if (!card) return undefined;
+	const beatmapId = Number(card.dataset.id);
+	if (!beatmapId) return undefined;
+	// a playlist lock, `rate+MODS`, wins over what is picked
+	const lock = card.dataset.lock;
+	if (lock) {
+		const [rate, mods = ''] = lock.split('+');
+		const letters = (mods.match(/.{2}/g) ?? []) as Mod[];
+		return { beatmapId, rate: Number(rate), mods: modsKey(letters) };
+	}
+	const rate = allowedRate(stored('rate', 1), speedUpgrades);
+	return { beatmapId, rate, mods: modsKey(parseMods(stored<Mod[]>('mods', []).join(','))) };
+};
+
+const ago = (ms: number) => {
+	const minutes = Math.round((Date.now() - ms) / 60000);
+	if (minutes < 60) return `${minutes} min ago`;
+	const hours = Math.round(minutes / 60);
+	return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`;
+};
+
+type Shown = { playedAt: number; base: Record<string, number>; seconds: number; levels: Record<string, number> };
+
+export default function SevenBox({ version }: { version: number }) {
+	const [character, setCharacter] = useState<CharacterRow>();
+	const [picked, setPicked] = useState<Picked>();
+	const [play, setPlay] = useState<Shown | null>();
+	const [status, setStatus] = useState<RateStatus>();
+	const [speed, setSpeed] = useState(0);
+	const [lengths, setLengths] = useState<Map<number, number>>(new Map());
+	const pickedKey = picked && `${picked.beatmapId}@${picked.rate}@${picked.mods}`;
+
+	useEffect(() => {
+		void beatmapStore.difficulties()
+			.then(list => setLengths(new Map(list.map(({ version: v }) => [v.id, v.total_length / 1000]))))
+			.catch(() => undefined);
+	}, []);
+
+	useEffect(() => {
+		let gone = false;
+		const tick = async () => {
+			try {
+				const row = await gameCharacter.live();
+				if (!gone && row) setCharacter(old => (old?.id === row.id ? old : row));
+			} catch { /* the database is not open yet */ }
+		};
+		void tick();
+		const timer = setInterval(() => void tick(), CHARACTER_MS);
+		return () => { gone = true; clearInterval(timer); };
+	}, []);
+
+	useEffect(() => {
+		const timer = setInterval(() => {
+			const now = ruleset() === RULESET_7K ? selection(speed) : undefined;
+			setPicked(old => (old?.beatmapId === now?.beatmapId && old?.rate === now?.rate && old?.mods === now?.mods ? old : now));
+		}, SELECTION_MS);
+		return () => clearInterval(timer);
+	}, [speed]);
+
+	useEffect(() => {
+		if (!character || !picked) { setPlay(undefined); return; }
+		const length = lengths.get(picked.beatmapId);
+		if (!length) { setPlay(undefined); return; }
+		let gone = false;
+		void progress7k(Number(character.id)).then(progress => {
+			if (gone) return;
+			setSpeed(progress?.speedUpgrades ?? 0);
+			const all = attemptsOf(Number(character.id)).sort((a, b) => a.startedAt - b.startedAt);
+			const tests = testsOf(all, progress?.levelSum ?? 0).get(`${picked.beatmapId}|${picked.mods}`);
+			setStatus(statusOf(tests, picked.rate));
+			const last = tests?.byRate.get(picked.rate)?.filter(a => !a.failed).at(-1);
+			setPlay(last ? { playedAt: last.startedAt, base: baseOf(last, all), seconds: length / last.rate, levels: last.levels } : null);
+		});
+		return () => { gone = true; };
+	}, [pickedKey, character?.id, lengths, version]);
+
+	if (!picked || play === undefined) return null;
+	const label = `x${picked.rate}${picked.mods ? ` +${picked.mods.replace(/,/g, '')}` : ''}`;
+	const skills = play ? Object.entries(play.base).filter(([, xp]) => xp > 0).sort((a, b) => b[1] - a[1]) : [];
+	const total = skills.reduce((sum, [, xp]) => sum + xp, 0);
+
+	return (
+		<div className="last-play" role="status" aria-label="Last 7K play at this rate">
+			<div className="last-play__head">7K · Last play at {label}</div>
+			{status && status !== 'tested' && (
+				<div className="last-play__none" style={{ color: status === 'untested' ? '#fbbf24' : '#888' }}>
+					{status === 'untested' ? 'Untested: worth a try' : status === 'failed' ? 'Failed here: not passed yet' : `Ruled out: ${status}`}
+				</div>
+			)}
+			{play === null ? (
+				<div className="last-play__none">Never passed at this rate and mods</div>
+			) : (
+				<>
+					<div className="last-play__total" title={skillBreakdown(Object.fromEntries(skills.map(([s, xp]) => [s, xp / play.seconds])))}>
+						{formatXp(total / play.seconds)} <span>base XP/s</span>
+					</div>
+					{skills.slice(0, 4).map(([skill, xp]) => (
+						<div className="last-play__row" key={skill}>
+							<span>{skillLabel(skill)}</span>
+							<span>{formatXp(xp / play.seconds)}/s</span>
+							<span className="last-play__lvl">{play.levels[skill] !== undefined ? `Lv ${Number(play.levels[skill]).toFixed(1)}` : ''}</span>
+						</div>
+					))}
+					<div className="last-play__foot">{ago(play.playedAt)} · fatigue, mindblock and multipliers taken out</div>
+				</>
+			)}
+		</div>
+	);
+}
