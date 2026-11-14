@@ -443,7 +443,22 @@ export type MapTests = {
 export const levelSumNow = (attempts: readonly Attempt[], progress?: { levelSum: number }): number =>
 	attempts.reduce((most, a) => Math.max(most, a.levelSumAfter ?? a.levelSum), progress?.levelSum ?? 0);
 
-export const testsOf = (attempts: readonly Attempt[], levelSum: number): Map<string, MapTests> => {
+/**
+ * When a fail stops skipping maps: once the level total has gained `liftAfter` levels since it
+ * (5 by default), or once it is older than `resetAt` (the player's own "retest fails now").
+ */
+export type FailRule = { liftAfter: number; resetAt: number };
+export const DEFAULT_FAIL_RULE: FailRule = { liftAfter: 5, resetAt: 0 };
+const FAIL_RULE_KEY = 'seven-tracker:fail-rule';
+export const readFailRule = (): FailRule => {
+	try { return { ...DEFAULT_FAIL_RULE, ...JSON.parse(localStorage.getItem(FAIL_RULE_KEY) ?? '{}') as Partial<FailRule> }; } catch { return DEFAULT_FAIL_RULE; }
+};
+export const saveFailRule = (rule: FailRule) => { try { localStorage.setItem(FAIL_RULE_KEY, JSON.stringify(rule)); } catch { /* not kept */ } };
+/** Whether a fail still skips maps at level total `levelSum`. */
+export const failHolds = (a: Attempt, levelSum: number, rule: FailRule = DEFAULT_FAIL_RULE): boolean =>
+	a.failed && !(a.startedAt <= rule.resetAt) && levelSum - a.levelSum < Math.max(1, rule.liftAfter);
+
+export const testsOf = (attempts: readonly Attempt[], levelSum: number, rule: FailRule = DEFAULT_FAIL_RULE): Map<string, MapTests> => {
 	const out = new Map<string, MapTests>();
 	for (const a of attempts) {
 		const key = `${a.beatmapId}|${a.mods}`;
@@ -453,21 +468,21 @@ export const testsOf = (attempts: readonly Attempt[], levelSum: number): Map<str
 		list.push(a);
 		t.byRate.set(a.rate, list);
 		if (!a.failed && totalOf(a.gains) <= 0) t.easyAt = Math.max(t.easyAt ?? -Infinity, a.rate);
-		// a fail rules out the faster rates until a skill levels up
-		if (a.failed && a.levelSum >= levelSum) t.hardAt = Math.min(t.hardAt ?? Infinity, a.rate);
+		// a fail rules out the faster rates until enough levels are gained, or the player lifts it
+		if (failHolds(a, levelSum, rule)) t.hardAt = Math.min(t.hardAt ?? Infinity, a.rate);
 	}
 	return out;
 };
 
 /**
  * The hardest a play may be, as its x1 stars × rate, before a fail rules it out: the easiest
- * play failed since the last level-up, of any map. Infinity when none has failed since.
+ * play failed that still holds (see {@link failHolds}), of any map. Infinity when none does.
  * Stars × rate stands in for the stars at that rate, which only the server knows.
  */
-export const failCeiling = (attempts: readonly Attempt[], levelSum: number, starsOf: (beatmapId: number) => number | undefined): number => {
+export const failCeiling = (attempts: readonly Attempt[], levelSum: number, starsOf: (beatmapId: number) => number | undefined, rule: FailRule = DEFAULT_FAIL_RULE): number => {
 	let ceiling = Infinity;
 	for (const a of attempts) {
-		if (!a.failed || a.levelSum < levelSum) continue;
+		if (!failHolds(a, levelSum, rule)) continue;
 		const stars = starsOf(a.beatmapId);
 		if (stars) ceiling = Math.min(ceiling, stars * a.rate);
 	}
@@ -476,7 +491,7 @@ export const failCeiling = (attempts: readonly Attempt[], levelSum: number, star
 
 /**
  * Where a map stands at a rate. With `hardness` (its x1 stars × rate) and the `ceiling` of
- * {@link failCeiling}, anything harder than a play failed since the last level-up is too hard.
+ * {@link failCeiling}, anything harder than a fail that still holds is too hard.
  */
 export const statusOf = (t: MapTests | undefined, rate: number, hardness?: number, ceiling = Infinity): RateStatus => {
 	const here = t?.byRate.get(rate);

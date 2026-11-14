@@ -10,7 +10,7 @@ import { beatmapStore, type CharacterRow } from '@oss-idle/addon-sdk';
 import { rateSteps } from '@oss-idle/shared/rate';
 import { replacePlaylist } from '../engine/playlist.js';
 import {
-	attemptsOf, baseOf, failCeiling, levelSumNow, MEDALS_KEY, medals7k, progress7k, readBars, recorderStatus, screenRates, statusOf, testsOf, totalOf,
+	attemptsOf, baseOf, failCeiling, levelSumNow, readFailRule, saveFailRule, type FailRule, MEDALS_KEY, medals7k, progress7k, readBars, recorderStatus, screenRates, statusOf, testsOf, totalOf,
 	type Attempt, type Progress7k,
 } from '../engine/seven.js';
 import { formatTime, formatXp, NumberField, skillBreakdown, skillLabel } from './parts.js';
@@ -102,9 +102,12 @@ export default function SevenView({ character, version, onClose }: { character?:
 	const rates = useMemo(() => rateSteps(allRates ? ALL_RATE_STEPS : progress?.speedUpgrades ?? 0), [allRates, progress?.speedUpgrades]);
 	const screened = useMemo(() => screenRates(rates), [rates]);
 	const levelNow = useMemo(() => levelSumNow(attempts, progress), [attempts, progress]);
-	const tests = useMemo(() => testsOf(attempts, levelNow), [attempts, levelNow]);
+	const [failRule, setFailRuleState] = useState<FailRule>(readFailRule);
+	const setFailRule = (rule: FailRule) => { setFailRuleState(rule); saveFailRule(rule); };
+	const tests = useMemo(() => testsOf(attempts, levelNow, failRule), [attempts, levelNow, failRule]);
 	// a fail rules out every harder map and rate too, until a skill levels up
-	const ceiling = useMemo(() => failCeiling(attempts, levelNow, id => byId.get(id)?.difficulty), [attempts, levelNow, byId]);
+	const ceiling = useMemo(() => failCeiling(attempts, levelNow, id => byId.get(id)?.difficulty, failRule), [attempts, levelNow, byId, failRule]);
+	const holding = attempts.filter(a => a.failed && a.startedAt > failRule.resetAt && levelNow - a.levelSum < Math.max(1, failRule.liftAfter)).length;
 	const statusAt = (m: Map7k, rate: number) => statusOf(tests.get(`${m.beatmapId}|`), rate, m.difficulty * rate, ceiling);
 
 	const measured = useMemo(() => {
@@ -254,6 +257,10 @@ export default function SevenView({ character, version, onClose }: { character?:
 				for (const rate of rates) if (rate > below && rate < above && open(row.map.beatmapId, rate)) entries.push({ beatmapId: row.map.beatmapId, rate });
 			}
 		}
+		// easiest first (x1 stars × rate): the plays most likely to pass come first, and a 0 XP early on
+		// rules out the slower rates further down; a fail rules out everything harder after it
+		const hardness = (e: { beatmapId: number; rate: number }) => (byId.get(e.beatmapId)?.difficulty ?? 0) * e.rate;
+		entries.sort((a, b) => hardness(a) - hardness(b));
 		const kept = entries.slice(0, maxEntries);
 		if (!kept.length) { setSaved('Nothing left to test there.'); return; }
 		setSaved('Saving...');
@@ -386,7 +393,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 						<p className="hint">
 							Every 7K play is recorded as it finishes, fails included. Base XP leaves out every multiplier (mindblock, fatigue, medals, genes, mods,
 							upgrades), so maps compare fairly. To save plays, some are skipped: a rate that gave 0 XP skips the map&apos;s slower rates, and a fail skips
-							its faster rates and every harder map (x1 stars × rate) until any skill levels up.
+							its faster rates and every harder map (x1 stars × rate) until you gain the level-ups set below. Test playlists go easiest first.
 						</p>
 						<div className="target-row">
 							<span className="hint">{maps.length.toLocaleString()} 7K maps downloaded · {rates.length} rates{progress ? '' : ' (your 7K Speed could not be read)'}</span>
@@ -404,6 +411,19 @@ export default function SevenView({ character, version, onClose }: { character?:
 							Screening rates {screened.map(r => `x${r}`).join(', ')}: <b>{counts.untested.toLocaleString()}</b> map and rate pairs left to test,{' '}
 							{counts.tested.toLocaleString()} tested, {counts.ruledOut.toLocaleString()} skipped.
 						</p>
+						<div className="target-row">
+							<label className="strain-filter" title="A fail skips that map's faster rates and every harder map until your 7K level total has gone up by this many levels">
+								Fails skip harder maps until
+								<NumberField aria-label="Levels before a fail stops skipping" min={1} max={500} integer value={failRule.liftAfter}
+									onChange={v => setFailRule({ ...failRule, liftAfter: v })} />
+								level-ups
+							</label>
+							<span className="hint">{holding ? `${holding} fail${holding === 1 ? '' : 's'} skipping maps now` : 'no fails skipping maps'}</span>
+							<button disabled={!holding} onClick={() => setFailRule({ ...failRule, resetAt: Date.now() })}
+								title="Stop every fail so far from skipping maps: they are tested again. Fails from now on skip as usual.">
+								Retest failed now
+							</button>
+						</div>
 						<div className="target-row">
 							<input aria-label="Test playlist name" value={testName} onChange={e => setTestName(e.target.value)} />
 							<label className="strain-filter" title="The most plays one playlist holds">

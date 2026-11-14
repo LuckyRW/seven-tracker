@@ -64,7 +64,10 @@ check('x0.8 itself is tested', m.statusOf(t, 0.8) === 'tested');
 check('a fail at x1.2 rules out x1.25', m.statusOf(t, 1.25) === 'too hard');
 check('x1.2 itself shows as failed', m.statusOf(t, 1.2) === 'failed');
 check('x1.1 is still untested', m.statusOf(t, 1.1) === 'untested');
-check('after a level-up the faster rates open again', m.statusOf(m.testsOf(plays, 101).get('10|'), 1.25) === 'untested');
+check('one level-up is not enough by default', m.statusOf(m.testsOf(plays, 101).get('10|'), 1.25) === 'too hard');
+check('5 level-ups open the faster rates again', m.statusOf(m.testsOf(plays, 105).get('10|'), 1.25) === 'untested');
+check('the number of level-ups can be set', m.statusOf(m.testsOf(plays, 101, { liftAfter: 1, resetAt: 0 }).get('10|'), 1.25) === 'untested');
+check('retest failed now lifts every fail so far', m.statusOf(m.testsOf(plays, 100, { liftAfter: 5, resetAt: Infinity }).get('10|'), 1.25) === 'untested');
 check('the screening grid: every third, x1 and the fastest',
 	m.screenRates([0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1, 1.05, 1.1]).join() === '0.5,0.65,0.8,0.95,1,1.1');
 
@@ -77,7 +80,8 @@ check('the screening grid: every third, x1 and the fastest',
 	check('a harder map is ruled out', m.statusOf(undefined, 1.3, 2.5 * 1.3, ceiling) === 'too hard');
 	check('an easier map stays open', m.statusOf(undefined, 1, 2.5, ceiling) === 'untested');
 	check('the failed play itself shows failed', m.statusOf(m.testsOf([failed], 10).get('2|'), 1, 3, ceiling) === 'failed');
-	check('a level-up lifts the ceiling', m.failCeiling([failed], 11, id => stars.get(id)) === Infinity);
+	check('5 level-ups lift the ceiling', m.failCeiling([failed], 15, id => stars.get(id)) === Infinity);
+	check('4 do not', m.failCeiling([failed], 14, id => stars.get(id)) === 3);
 	check('a passed harder play stays tested', m.statusOf(m.testsOf([{ ...failed, beatmapId: 1, rate: 2, failed: false, gains: { speed: 5 } }], 10).get('1|'), 2, 4, ceiling) === 'tested');
 }
 
