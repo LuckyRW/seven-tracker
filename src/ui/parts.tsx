@@ -31,7 +31,7 @@ export const formatRate = (value: number) =>
 	value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2);
 
 export const formatXp = (value: number) =>
-	value >= 10_000 ? `${(value / 1000).toFixed(1)}k` : Math.round(value).toLocaleString();
+	value >= 10_000 ? `${(value / 1000).toFixed(1)}k` : value > 0 && value < 10 ? value.toFixed(1) : Math.round(value).toLocaleString();
 
 /**
  * A number the player types. The field holds what they type while they type it, so

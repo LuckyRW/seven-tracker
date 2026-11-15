@@ -262,7 +262,11 @@ export const attemptsOf = (characterId: number): Attempt[] => {
 };
 
 export const readAttempts = (): Attempt[] => {
-	try { return JSON.parse(localStorage.getItem(STORE_KEY) ?? '[]') as Attempt[]; } catch { return []; }
+	let all: Attempt[];
+	try { all = JSON.parse(localStorage.getItem(STORE_KEY) ?? '[]') as Attempt[]; } catch { return []; }
+	// a play is kept once, however many recorders saw its result (an add-on loaded twice)
+	const seen = new Set<string>();
+	return all.filter(a => !seen.has(a.token) && (seen.add(a.token), true));
 };
 const writeAttempts = (all: Attempt[]): boolean => {
 	try { localStorage.setItem(STORE_KEY, JSON.stringify(all.slice(-MAX_ATTEMPTS))); return true; } catch { return false; }
@@ -471,6 +475,7 @@ export const recordPlays = (
 			const levelSum = Object.values(levels).reduce((a, b) => a + Number(b), 0);
 			const gainedLevels = gains.reduce((sum, g) => sum + Math.max(0, (g.toLevel ?? g.fromLevel) - g.fromLevel), 0);
 			const all = readAttempts();
+			if (all.some(a => a.token === msg.token)) { console.info('[7K tracker] 7K play already recorded by another recorder'); return; }
 			all.push({
 				token: msg.token,
 				...play,
