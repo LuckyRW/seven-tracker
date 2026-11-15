@@ -381,6 +381,7 @@ export const recordPlays = (
 	const started = new Map<string, Started>();
 	const done = new Set<string>();
 	const hooked = new WeakSet<WebSocket>();
+	const sockets: WebSocket[] = [];
 
 	let lastId: number | undefined;
 	/** plays seen running in the server's checkpoints, by token */
@@ -406,8 +407,9 @@ export const recordPlays = (
 			progress: latestProgress,
 		};
 	};
+	let stopped = false;
 	const onMessage = (e: MessageEvent) => {
-		if (typeof e.data !== 'string') return;
+		if (stopped || typeof e.data !== 'string') return;
 		// the character as the server has it: 7K's levels, upgrades, overdrive and genes
 		if (e.data.includes('"type":"character"')) {
 			try {
@@ -425,7 +427,7 @@ export const recordPlays = (
 		try { msg = JSON.parse(e.data); } catch { return; }
 		recorderStatus.lastMessage = Date.now();
 		const r = msg.result as { status?: string; ruleset?: string; ok?: boolean; failed?: boolean } | undefined;
-		console.info(`[7K tracker] socket: ${msg.type}${r?.status ? ` ${r.status}` : ''}${r?.ruleset ? ` ${r.ruleset}` : ''}${r?.ok !== undefined ? ` ok=${r.ok}` : ''}${r?.failed !== undefined ? ` failed=${r.failed}` : ''}${msg.token ? ` token=${String(msg.token).slice(0, 6)}` : ''}`);
+		if (msg.type === 'play:start' || msg.type === 'play:result') console.info(`[7K tracker] socket: ${msg.type}${r?.status ? ` ${r.status}` : ''}${r?.ruleset ? ` ${r.ruleset}` : ''}${r?.ok !== undefined ? ` ok=${r.ok}` : ''}${r?.failed !== undefined ? ` failed=${r.failed}` : ''}${msg.token ? ` token=${String(msg.token).slice(0, 6)}` : ''}`);
 		if (msg.type === 'play:start' && msg.result?.status === 'ranked' && msg.result.ruleset === RULESET_7K) {
 			// a joined start resumes a play (a reload, a rejoin): kept as first seen, or taken up if missed
 			if (started.has(String(msg.result.token)) || done.has(String(msg.result.token))) return;
@@ -517,6 +519,7 @@ export const recordPlays = (
 	const hook = (ws: WebSocket) => {
 		if (hooked.has(ws)) return;
 		hooked.add(ws);
+		sockets.push(ws);
 		recorderStatus.sockets++;
 		console.info(`[7K tracker] listening on socket ${ws.url.replace(/\?.*/, '')}`);
 		ws.addEventListener('message', onMessage);
@@ -550,11 +553,18 @@ export const recordPlays = (
 	Object.assign(Watched, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });
 	globalThis.WebSocket = Watched;
 	(globalThis as { sevenTracker?: unknown }).sevenTracker = recorderStatus;
-	return () => {
+	const stop = () => {
+		stopped = true;
+		for (const ws of sockets) ws.removeEventListener('message', onMessage);
 		clearInterval(timer);
 		if (proto.send === ours) proto.send = original;
 		if (globalThis.WebSocket === Watched) globalThis.WebSocket = Original;
 	};
+	// one recorder only: a copy loaded earlier (a build pasted over another) is stopped
+	const g = globalThis as { sevenTrackerStop?: () => void };
+	try { g.sevenTrackerStop?.(); } catch { /* already gone */ }
+	g.sevenTrackerStop = stop;
+	return () => { stop(); if (g.sevenTrackerStop === stop) delete g.sevenTrackerStop; };
 };
 
 // ---- what an attempt was worth ----
