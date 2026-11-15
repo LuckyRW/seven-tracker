@@ -115,12 +115,57 @@ export const noteCharacter = (dto: { id?: number; ruleset?: string; skills?: Rec
 const sentRow = (characterId: number): Row | undefined => {
 	let sent: Sent | undefined;
 	try { sent = JSON.parse(localStorage.getItem(SENT_KEY) ?? 'null') ?? undefined; } catch { return undefined; }
-	if (!sent || sent.id !== characterId) return undefined;
+	// the game's local id for a character can differ from the server's: the last one sent is still
+	// the character being played
+	if (!sent) return undefined;
+	if (sent.id !== characterId) console.info(`[7K tracker] character ${characterId} read from the one the server sent (${sent.id})`);
 	const row: Row = { characterId, geneticsJson: sent.genetics ? JSON.stringify(sent.genetics) : '' };
 	for (const [skill, p] of Object.entries(sent.skills)) {
 		row[skill] = p.level; row[`${skill}XP`] = p.xp; row[`${skill}Upgrades`] = p.upgrades;
 		row[`${skill}Overdrive`] = p.overdrive; row[`${skill}Prestige`] = p.prestige; row[`${skill}LifetimeXp`] = p.lifetimeXp ?? 0;
 	}
+	return row;
+};
+
+/** The game's API: production's, or the beta's own origin on the beta test server. */
+const API_BASE = (() => {
+	try { if (/^pbe\./.test(location.hostname)) return location.origin; } catch { /* no location */ }
+	return 'https://api.oss.idle.rhythmgamers.net';
+})();
+const SERVER_FRESH_MS = 10_000;
+let served: { at: number; row: Row | undefined } | undefined;
+
+/**
+ * The character being played, in 7K, as the server has it: its id from the add-on API's `/me`, its
+ * progress from the public `GET /v1/characters/:id?ruleset=mania7k` (level, XP, lifetime XP,
+ * upgrades, overdrive and prestige per skill). Undefined offline, as a guest, or for a character
+ * reborn into 4K only.
+ */
+const serverRow = async (): Promise<Row | undefined> => {
+	if (served && Date.now() - served.at < SERVER_FRESH_MS) return served.row;
+	let row: Row | undefined;
+	try {
+		const api = (globalThis as { ossIdle?: { api?: { me?: (o?: { ruleset?: string }) => Promise<unknown> } } }).ossIdle?.api;
+		const me = await api?.me?.({ ruleset: RULESET_7K }) as { character_id?: number } | undefined;
+		const id = Number(me?.character_id);
+		if (id) {
+			const res = await fetch(`${API_BASE}/v1/characters/${id}?ruleset=${RULESET_7K}`);
+			const json = res.ok ? await res.json() as Row & { rulesetLock?: string } : undefined;
+			if (json && (!json.rulesetLock || json.rulesetLock === RULESET_7K)) {
+				// the server names a skill's level and XP `jacksLevel` / `jacksXp`; the tables, `jacks` / `jacksXP`
+				row = { characterId: id, geneticsJson: '' };
+				for (const [k, v] of Object.entries(json)) {
+					if (k.endsWith('Level') && k !== 'overallLevel') row[k.slice(0, -5)] = v;
+					else if (k.endsWith('Xp') && !k.endsWith('TotalXp') && !k.endsWith('LifetimeXp')) row[`${k.slice(0, -2)}XP`] = v;
+					else if (/(Upgrades|Overdrive|Prestige|LifetimeXp)$/.test(k)) row[k] = v;
+				}
+				// genes are not in that answer: the ones the socket last sent
+				const sent = sentRow(id);
+				if (sent?.geneticsJson) row.geneticsJson = sent.geneticsJson;
+			}
+		}
+	} catch { /* offline: the socket's copy instead */ }
+	served = { at: Date.now(), row };
 	return row;
 };
 
@@ -130,8 +175,11 @@ const sentRow = (characterId: number): Row | undefined => {
  * then it is read by whichever key the table has, or as its only row.
  */
 const progressRow = async (characterId: number): Promise<Row | undefined> => {
+	// the server's own answer first: the character being played, asked of the public API
+	const served = await serverRow();
+	if (served) return served;
 	// an account character's 7K progress is never written to the table (only a guest's is): what
-	// the server last sent over the socket comes first
+	// the server last sent over the socket comes next
 	const sent = sentRow(characterId);
 	if (sent) return sent;
 	const byKey = (key: string) => gameDb.first<Row>(`SELECT * FROM character_mania7k WHERE ${key} = ?`, [characterId]);
@@ -148,6 +196,9 @@ const progressRow = async (characterId: number): Promise<Row | undefined> => {
 };
 
 /** The character's 7K progress: its own table, `character_mania7k`. */
+/** The last 7K progress read: what a play whose start was missed is recorded with. */
+let latestProgress: Progress7k | undefined;
+
 export const progress7k = async (characterId: number): Promise<Progress7k | undefined> => {
 	const row = await progressRow(characterId);
 	if (!row) return undefined;
@@ -155,7 +206,7 @@ export const progress7k = async (characterId: number): Promise<Progress7k | unde
 	// each skill's play level: its lifetime XP's level plus its prestige, as the game shows it. Unlike
 	// the Upgrades screen's level, buying an upgrade never takes it down
 	const levels = Object.fromEntries(SKILLS_7K.map(s => [s, Math.floor(playLevelOf(num(s), num(`${s}XP`), num(`${s}LifetimeXp`), num(`${s}Prestige`)))]));
-	return {
+	const progress: Progress7k = {
 		levels,
 		own: Object.fromEntries(SKILLS_7K.map(s => [s, skillXPMultiplier(num(`${s}Upgrades`), num(`${s}Overdrive`), num(`${s}Prestige`))])),
 		genetics: geneticsMultipliers(String(row.geneticsJson ?? '')),
@@ -163,6 +214,8 @@ export const progress7k = async (characterId: number): Promise<Progress7k | unde
 		speedUpgrades: num('speedUpgrades') + num('speedPrestige'),
 		levelSum: Object.values(levels).reduce((a, b) => a + b, 0),
 	};
+	latestProgress = progress;
+	return progress;
 };
 
 // ---- the record ----
@@ -293,6 +346,8 @@ export const recordPlays = (
 		return {
 			characterId: id, beatmapId, rate: Number(score?.rate ?? state?.rate) || 1,
 			mods: score?.mods ? modsKey(score.mods) : state?.mods ?? '', startedAt: state?.at ?? Date.now(), fatigue: 0,
+			// the latest progress read: its play levels, multipliers and genes
+			progress: latestProgress,
 		};
 	};
 	const onMessage = (e: MessageEvent) => {

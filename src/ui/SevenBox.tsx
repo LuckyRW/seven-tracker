@@ -57,7 +57,7 @@ const ago = (ms: number) => {
 	return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`;
 };
 
-type Shown = { playedAt: number; base: Record<string, number>; seconds: number; levels: Record<string, number>; /** levels gained since it */ since: number };
+type Shown = { playedAt: number; base: Record<string, number>; seconds: number; levels: Record<string, number>; /** levels gained since it */ since: number; /** counted in play levels (lifetime + prestige) */ playLevels: boolean };
 
 /** Where the box was dragged to, kept across restarts; unset, it sits at the left, halfway down. */
 const POS_KEY = 'seven-tracker:box-pos';
@@ -154,7 +154,7 @@ export default function SevenBox({ version }: { version: number }) {
 			};
 			setStatus(screenState(tests, picked.rate, { levelSum, rule, stars: own ?? 0, ceiling: failCeiling(all, levelSum, id => stars.get(id), rule), xpsAt, reach: reachOf(all, id => stars.get(id), rule.reachMargin ?? 2) }));
 			const last = tests?.byRate.get(picked.rate)?.filter(a => !a.failed).at(-1);
-			setPlay(last ? { playedAt: last.startedAt, base: baseOf(last, all), seconds: length / last.rate, levels: last.levels, since: levelSum - last.levelSum } : null);
+			setPlay(last ? { playedAt: last.startedAt, base: baseOf(last, all), seconds: length / last.rate, levels: last.levels, since: levelSum - last.levelSum, playLevels: last.levelKind === 'play' } : null);
 		});
 		return () => { gone = true; };
 	}, [pickedKey, character?.id, lengths, stars, version]);
@@ -195,7 +195,7 @@ export default function SevenBox({ version }: { version: number }) {
 							<span className="last-play__lvl">{play.levels[skill] !== undefined ? `Lv ${Number(play.levels[skill]).toFixed(1)}` : ''}</span>
 						</div>
 					))}
-					<div className="last-play__foot">{ago(play.playedAt)} · <b title="7K levels gained since this pass: the higher, the more out of date it is">{play.since > 0 ? `+${play.since} levels since` : 'no levels since'}</b> · fatigue, mindblock and upgrades taken out; genes kept</div>
+					<div className="last-play__foot">{ago(play.playedAt)} · <b title="7K levels gained since this pass: the higher, the more out of date it is">{play.since > 0 ? `+${play.since} levels since` : 'no levels since'}{play.playLevels ? '' : ' (older play: too high, replay to fix)'}</b> · fatigue, mindblock and upgrades taken out; genes kept</div>
 				</>
 			)}
 		</div>

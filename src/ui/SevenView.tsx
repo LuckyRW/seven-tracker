@@ -34,6 +34,8 @@ type Measured = {
 	drift?: number;
 	/** the level total at its last pass, to tell how far you have come since */
 	levelSum: number;
+	/** whether that total is in play levels (lifetime + prestige) or, for older plays, the Upgrades screen's */
+	playLevels: boolean;
 };
 
 type Tab = 'playlist' | 'maps' | 'testing';
@@ -159,7 +161,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 				const d = drifts.get(`${mapId}@${rate}@`);
 				rows.push({
 					map, rate, perSecond: totalOf(base) / seconds, skills: Object.fromEntries(Object.entries(base).map(([s, xp]) => [s, xp / seconds])), top, topPerSecond: topXp / seconds,
-					level: top ? last.levels[top] : undefined, at: last.startedAt, plays: list.length, fails: list.length - passes.length, levelSum: last.levelSum,
+					level: top ? last.levels[top] : undefined, at: last.startedAt, plays: list.length, fails: list.length - passes.length, levelSum: last.levelSum, playLevels: last.levelKind === 'play',
 					drift: d?.length ? d.reduce((x, y) => x + y, 0) / d.length : undefined,
 				});
 			}
@@ -336,7 +338,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 									</span>
 									<Tip className="num strong" text={skillBreakdown(row.skills)}>{formatXp(row.perSecond)}</Tip>
 									<span className="num" style={{ color: driftColor(row.drift) }}>{row.drift === undefined ? '–' : `${signed(row.drift)}m`}</span>
-									<span className="num muted" title={`${levelNow - row.levelSum} levels gained since it was last passed`}>{sinceLabel(levelNow - row.levelSum)}</span>
+									<span className="num muted" title={row.playLevels ? `${levelNow - row.levelSum} play levels (lifetime + prestige) gained since it was last passed` : 'Passed before play levels were kept: counted from the levels on the Upgrades screen, which read lower, so this is too high. Replay it to fix.'}>{sinceLabel(levelNow - row.levelSum)}{row.playLevels ? '' : '*'}</span>
 									<button className="icon" aria-label="Remove from the playlist" title="Remove" onClick={() => toggle(key)}>✕</button>
 								</div>
 							);
@@ -379,7 +381,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 										{row.top ? <>{skillLabel(row.top)} <span className="muted">Lv {row.level ?? '?'}</span></> : ''}
 									</span>
 									<span className="num" style={{ color: driftColor(row.drift) }}>{row.drift === undefined ? '–' : `${signed(row.drift)}m`}</span>
-									<span className="num muted" title={`${levelNow - row.levelSum} levels gained since it was last passed`}>{sinceLabel(levelNow - row.levelSum)}</span>
+									<span className="num muted" title={row.playLevels ? `${levelNow - row.levelSum} play levels (lifetime + prestige) gained since it was last passed` : 'Passed before play levels were kept: counted from the levels on the Upgrades screen, which read lower, so this is too high. Replay it to fix.'}>{sinceLabel(levelNow - row.levelSum)}{row.playLevels ? '' : '*'}</span>
 									<span className="num muted" title={`last played ${new Date(row.at).toLocaleString()}`}>{row.plays}{row.fails ? ` (${row.fails}✗)` : ''}</span>
 								</div>
 							);
