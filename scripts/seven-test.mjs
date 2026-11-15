@@ -138,6 +138,13 @@ check('the screening grid: every third, x1 and the fastest',
 	check('x0.8 (4.0) slowed into reach opens', m.screenState(undefined, 0.8, c) === 'open');
 }
 
+// the level total now is the live play levels', not inflated by plays' Upgrades-screen level gains
+{
+	const play = { failed: false, levelSum: 300, levelSumAfter: 305, levelKind: 'play' };
+	check('live play levels win over a play total', m.levelSumNow([play], { levelSum: 301 }) === 301);
+	check('without them, the most a play left', m.levelSumNow([play], undefined) === 305);
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;

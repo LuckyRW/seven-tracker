@@ -421,7 +421,8 @@ export const recordPlays = (
 				gains: Object.fromEntries(gains.filter(g => g.gained > 0).map(g => [g.skill, g.gained])),
 				levels,
 				levelSum,
-				levelSumAfter: levelSum + gainedLevels,
+				// the result's level gains are the Upgrades screen's: added only to that kind of total
+				levelSumAfter: playLevels ? undefined : levelSum + gainedLevels,
 				levelKind: playLevels ? 'play' : 'upgrades',
 				own: play.progress?.own ?? {},
 				genetics: play.progress?.genetics ?? {},
@@ -521,7 +522,8 @@ export type MapTests = {
  * from fails lift once this passes the total a fail was played at.
  */
 export const levelSumNow = (attempts: readonly Attempt[], progress?: { levelSum: number }): number =>
-	attempts.reduce((most, a) => Math.max(most, a.levelSumAfter ?? a.levelSum), progress?.levelSum ?? 0);
+	// the live play levels when they can be read; only without them, the most any play left them at
+	progress ? progress.levelSum : attempts.reduce((most, a) => Math.max(most, a.levelSumAfter ?? a.levelSum), 0);
 
 /**
  * When a fail stops skipping maps: once the level total has gained `liftAfter` levels since it
