@@ -117,6 +117,20 @@ check('the screening grid: every third, x1 and the fastest',
 	check('a pass over 95% is never replayed', m.screenState(m.testsOf([play(1)], 99, rule).get('7|'), 1, { ...ctx(), levelSum: 99 }) === 'tested');
 }
 
+// reach: nothing far above the hardest pass is screened, unless slowed into range
+{
+	const stars = new Map([[7, 2], [8, 5]]);
+	const passed = { token: 'a', characterId: 1, beatmapId: 7, rate: 1, mods: '', startedAt: 1, fatigue: 0, failed: false, gains: { speed: 5 }, levels: {}, levelSum: 50, own: {}, genetics: {} };
+	const reach = m.reachOf([passed], id => stars.get(id), 2);
+	check('reach is the hardest pass plus the margin', near(reach, 4));
+	check('no passes: no limit', m.reachOf([], id => stars.get(id), 2) === Infinity);
+	const rule = { liftAfter: 5, resetAt: 0, minAccuracy: 95, reachMargin: 2 };
+	const c = { levelSum: 50, rule, stars: 5, ceiling: Infinity, reach, xpsAt: () => undefined };
+	check('a 5 star map at x1 is out of reach', m.screenState(undefined, 1, c) === 'out of reach');
+	check('so is x0.85 (4.25)', m.screenState(undefined, 0.85, c) === 'out of reach');
+	check('x0.8 (4.0) slowed into reach opens', m.screenState(undefined, 0.8, c) === 'open');
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;

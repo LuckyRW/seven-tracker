@@ -464,8 +464,10 @@ export type FailRule = {
 	resetAt: number;
 	/** a pass under this accuracy, in percent, is screened again after `liftAfter` level-ups: more levels may play it better */
 	minAccuracy: number;
+	/** screen nothing more than this many stars (x1 stars × rate) above the hardest pass */
+	reachMargin: number;
 };
-export const DEFAULT_FAIL_RULE: FailRule = { liftAfter: 5, resetAt: 0, minAccuracy: 95 };
+export const DEFAULT_FAIL_RULE: FailRule = { liftAfter: 5, resetAt: 0, minAccuracy: 95, reachMargin: 2 };
 const FAIL_RULE_KEY = 'seven-tracker:fail-rule';
 export const readFailRule = (): FailRule => {
 	try { return { ...DEFAULT_FAIL_RULE, ...JSON.parse(localStorage.getItem(FAIL_RULE_KEY) ?? '{}') as Partial<FailRule> }; } catch { return DEFAULT_FAIL_RULE; }
@@ -551,7 +553,22 @@ export type ScreenState =
 	/** failed here, and not enough level-ups since */
 	| 'failed'
 	/** a fail at a slower rate, or on an easier map, holds */
-	| 'too hard';
+	| 'too hard'
+	/** far harder (x1 stars × rate) than the hardest play passed yet */
+	| 'out of reach';
+
+/**
+ * How hard a play may be (x1 stars × rate) to be screened: `margin` stars above the hardest play
+ * passed yet. Infinity before any pass, so the first plays find where the character stands.
+ */
+export const reachOf = (attempts: readonly Attempt[], starsOf: (beatmapId: number) => number | undefined, margin: number): number => {
+	let hardest = -Infinity;
+	for (const a of attempts) {
+		const stars = !a.failed ? starsOf(a.beatmapId) : undefined;
+		if (stars) hardest = Math.max(hardest, stars * a.rate);
+	}
+	return hardest === -Infinity ? Infinity : hardest + margin;
+};
 
 export type ScreenContext = {
 	/** the level total now ({@link levelSumNow}) */
@@ -563,6 +580,8 @@ export type ScreenContext = {
 	stars: number;
 	/** {@link failCeiling} */
 	ceiling: number;
+	/** the hardest a play may be (x1 stars × rate) to be screened: {@link reachOf} */
+	reach?: number;
 };
 
 /**
@@ -583,6 +602,8 @@ export const screenState = (t: MapTests | undefined, rate: number, c: ScreenCont
 		return low && c.levelSum - last.levelSum >= Math.max(1, c.rule.liftAfter) ? 'retest' : 'tested';
 	}
 	if (t?.easyAt !== undefined && r < t.easyAt) return '0 XP';
+	const reach = c.reach ?? Infinity;
+	if (c.stars * r > reach + 1e-9) return 'out of reach';
 	if (at(r).some(a => failHolds(a, c.levelSum, c.rule))) return 'failed';
 	if (r >= 1) {
 		if (t?.hardAt !== undefined && r > t.hardAt) return 'too hard';
@@ -590,6 +611,8 @@ export const screenState = (t: MapTests | undefined, rate: number, c: ScreenCont
 		return r === 1 || passed(r - 0.05) ? 'open' : 'waiting';
 	}
 	const faster = round2(r + 0.05);
+	// the rate a step faster is out of reach: this one, slowed into reach, is where the map starts
+	if (c.stars * faster > reach + 1e-9 && !at(faster).length) return 'open';
 	if (!at(faster).length) return 'waiting';
 	if (!passed(faster)) return 'open';
 	if (faster >= 1) return 'open';

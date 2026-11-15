@@ -10,7 +10,7 @@ import { beatmapStore, type CharacterRow } from '@oss-idle/addon-sdk';
 import { rateSteps } from '@oss-idle/shared/rate';
 import { replacePlaylist } from '../engine/playlist.js';
 import {
-	attemptsOf, baseOf, failCeiling, levelSumNow, readFailRule, saveFailRule, type FailRule, MEDALS_KEY, medals7k, progress7k, readBars, recorderStatus, ringOrder, screenState, testsOf, totalOf, type ScreenState,
+	attemptsOf, baseOf, failCeiling, levelSumNow, readFailRule, saveFailRule, type FailRule, MEDALS_KEY, medals7k, progress7k, readBars, recorderStatus, reachOf, ringOrder, screenState, testsOf, totalOf, type ScreenState,
 	type Attempt, type Progress7k,
 } from '../engine/seven.js';
 import { formatTime, formatXp, NumberField, skillBreakdown, skillLabel, Tip } from './parts.js';
@@ -32,6 +32,8 @@ type Measured = {
 	fails: number;
 	/** mean strain minutes added per play, start to the next play's start (less than 0 rests) */
 	drift?: number;
+	/** the level total at its last pass, to tell how far you have come since */
+	levelSum: number;
 };
 
 type Tab = 'playlist' | 'maps' | 'testing';
@@ -56,6 +58,8 @@ const keep = (key: string, value: unknown) => { try { localStorage.setItem(key, 
 
 const rowKey = (row: { map: { beatmapId: number }; rate: number }) => `${row.map.beatmapId}@${row.rate}`;
 const signed = (n: number, digits = 1) => `${n > 0 ? '+' : ''}${n.toFixed(digits)}`;
+/** Levels gained since a pass: how far out of date its numbers may be. */
+const sinceLabel = (n: number) => (n > 0 ? `+${n}` : '0');
 const driftColor = (d?: number) => (d === undefined ? 'var(--faint, #888)' : d > 0 ? '#f87171' : '#38bdf8');
 
 /** A map's title and, under it, its difficulty, stars and length at its rate. */
@@ -113,8 +117,10 @@ export default function SevenView({ character, version, onClose }: { character?:
 	// a fail rules out every harder map and rate too, until a skill levels up
 	const ceiling = useMemo(() => failCeiling(attempts, levelNow, id => byId.get(id)?.difficulty, failRule), [attempts, levelNow, byId, failRule]);
 	const holding = attempts.filter(a => a.failed && a.startedAt > failRule.resetAt && levelNow - a.levelSum < Math.max(1, failRule.liftAfter)).length;
+	// nothing far harder than the hardest play passed yet (slowed into reach, a harder map still is)
+	const reach = useMemo(() => reachOf(attempts, id => byId.get(id)?.difficulty, failRule.reachMargin ?? 2), [attempts, byId, failRule.reachMargin]);
 	const stateAt = (m: Map7k, rate: number): ScreenState => screenState(tests.get(`${m.beatmapId}|`), rate, {
-		levelSum: levelNow, rule: failRule, stars: m.difficulty, ceiling,
+		levelSum: levelNow, rule: failRule, stars: m.difficulty, ceiling, reach,
 		xpsAt: r => byKey.get(`${m.beatmapId}@${Math.round(r * 100) / 100}`)?.perSecond,
 	});
 
@@ -153,7 +159,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 				const d = drifts.get(`${mapId}@${rate}@`);
 				rows.push({
 					map, rate, perSecond: totalOf(base) / seconds, skills: Object.fromEntries(Object.entries(base).map(([s, xp]) => [s, xp / seconds])), top, topPerSecond: topXp / seconds,
-					level: top ? last.levels[top] : undefined, at: last.startedAt, plays: list.length, fails: list.length - passes.length,
+					level: top ? last.levels[top] : undefined, at: last.startedAt, plays: list.length, fails: list.length - passes.length, levelSum: last.levelSum,
 					drift: d?.length ? d.reduce((x, y) => x + y, 0) / d.length : undefined,
 				});
 			}
@@ -242,7 +248,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 		}
 		return n;
 	// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [maps, rings, tests, ceiling, byKey, failRule, levelNow]);
+	}, [maps, rings, tests, ceiling, byKey, failRule, levelNow, reach]);
 	const saveTests = async (kind: 'x1' | 'screen') => {
 		// maps easiest first by their x1 stars, ring by ring: every map at x1, then every map a step
 		// slower, then a step faster... A ring's maps are in only once the ring before was played for
@@ -311,7 +317,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 					</div>
 					<div className="rows">
 						<div className="row playlist seven-playlist head">
-							<span /><span>Map</span><span>Plays as</span><span className="num">Base XP/s</span><span className="num" title="Strain minutes a play adds, start to the next play's start: less than 0 rests">Drift</span><span />
+							<span /><span>Map</span><span>Plays as</span><span className="num">Base XP/s</span><span className="num" title="Strain minutes a play adds, start to the next play's start: less than 0 rests">Drift</span><span className="num" title="7K levels gained since this was last passed: the higher, the more out of date its numbers">Lv since</span><span />
 						</div>
 						{rotation.map((row, i) => {
 							const key = rowKey(row);
@@ -330,6 +336,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 									</span>
 									<Tip className="num strong" text={skillBreakdown(row.skills)}>{formatXp(row.perSecond)}</Tip>
 									<span className="num" style={{ color: driftColor(row.drift) }}>{row.drift === undefined ? '–' : `${signed(row.drift)}m`}</span>
+									<span className="num muted" title={`${levelNow - row.levelSum} levels gained since it was last passed`}>{sinceLabel(levelNow - row.levelSum)}</span>
 									<button className="icon" aria-label="Remove from the playlist" title="Remove" onClick={() => toggle(key)}>✕</button>
 								</div>
 							);
@@ -357,7 +364,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 					</div>
 					<div className="rows">
 						<div className="row seven-maps head">
-							<span /><span>Map</span><span>Rate</span><span className="num">Base XP/s</span><span className="num">Best skill</span><span className="num" title="Strain minutes a play adds, start to the next play's start: less than 0 rests">Drift</span><span className="num">Plays</span>
+							<span /><span>Map</span><span>Rate</span><span className="num">Base XP/s</span><span className="num">Best skill</span><span className="num" title="Strain minutes a play adds, start to the next play's start: less than 0 rests">Drift</span><span className="num" title="7K levels gained since this was last passed: the higher, the more out of date its numbers">Lv since</span><span className="num">Plays</span>
 						</div>
 						{listed.map(row => {
 							const key = rowKey(row);
@@ -372,6 +379,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 										{row.top ? <>{skillLabel(row.top)} <span className="muted">Lv {row.level ?? '?'}</span></> : ''}
 									</span>
 									<span className="num" style={{ color: driftColor(row.drift) }}>{row.drift === undefined ? '–' : `${signed(row.drift)}m`}</span>
+									<span className="num muted" title={`${levelNow - row.levelSum} levels gained since it was last passed`}>{sinceLabel(levelNow - row.levelSum)}</span>
 									<span className="num muted" title={`last played ${new Date(row.at).toLocaleString()}`}>{row.plays}{row.fails ? ` (${row.fails}✗)` : ''}</span>
 								</div>
 							);
@@ -431,6 +439,12 @@ export default function SevenView({ character, version, onClose }: { character?:
 								<NumberField aria-label="Accuracy bar, percent" min={0} max={100} value={failRule.minAccuracy}
 									onChange={v => setFailRule({ ...failRule, minAccuracy: v })} />
 								% accuracy after those level-ups
+							</label>
+							<label className="strain-filter" title="Maps and rates harder than this (x1 stars × rate) above your hardest pass are not screened; a slower rate that brings a hard map into range still is">
+								Skip more than
+								<NumberField aria-label="Stars above the hardest pass" min={0} max={10} value={failRule.reachMargin ?? 2}
+									onChange={v => setFailRule({ ...failRule, reachMargin: v })} />
+								★ above your hardest pass{Number.isFinite(reach) ? ` (up to ${reach.toFixed(2)}★)` : ''}
 							</label>
 						</div>
 						<div className="target-row">
