@@ -164,7 +164,8 @@ const serverRow = async (): Promise<Row | undefined> => {
 				if (sent?.geneticsJson) row.geneticsJson = sent.geneticsJson;
 			}
 		}
-	} catch { /* offline: the socket's copy instead */ }
+		else console.warn('[7K tracker] the add-on API gave no character id for 7K', me);
+	} catch (err) { console.warn('[7K tracker] 7K progress not read from the API:', err); }
 	served = { at: Date.now(), row };
 	return row;
 };
@@ -400,6 +401,12 @@ export const recordPlays = (
 			if (done.has(msg.token)) return;
 			const play = started.get(msg.token) ?? unstarted(msg.token, msg.result);
 			if (!play) return;
+			// the read at its start failed or has not come back: the last progress read instead, so its
+			// multipliers still come out of its XP
+			if (!play.progress && latestProgress) {
+				console.warn('[7K tracker] 7K progress missing at the play start: the last one read is used');
+				play.progress = latestProgress;
+			}
 			recorderStatus.waiting = started.size - 1;
 			done.add(msg.token);
 			started.delete(msg.token);
@@ -495,7 +502,9 @@ export const baseOf = (attempt: Attempt, before: readonly Attempt[]): Record<str
 	return Object.fromEntries(Object.entries(attempt.gains).map(([skill, xp]) => {
 		// genetics stay in: base XP is what the character earns with the genes it has (they are kept,
 		// per play, in `genetics`)
-		const by = (attempt.own[skill] || 1) * medals * modXp(mods, skill)
+		// a play recorded without its multipliers: today's, which is closer than none
+		const own = attempt.own[skill] || latestProgress?.own[skill] || 1;
+		const by = own * medals * modXp(mods, skill)
 			* (MINDBLOCK.has(skill) ? block : 1) * (PHYSICAL.has(skill) ? tired : 1);
 		return [skill, by > 0 ? xp / by : 0];
 	}));
