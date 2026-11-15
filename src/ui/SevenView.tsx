@@ -44,7 +44,8 @@ const PICKED_KEY = 'seven-tracker:picked';
 /** The order they were picked in: the playlist plays them in it. */
 const ORDER_KEY = 'seven-tracker:picked-order';
 const TAB_KEY = 'seven-tracker:tab';
-const ALL_RATES_KEY = 'seven-tracker:all-rates';
+/** Every rate, not only Speed's: off unless ticked (a new key, so it starts off once Speed can be read). */
+const ALL_RATES_KEY = 'seven-tracker:every-rate';
 /** Speed unlocks that open every rate, x0.5 to x1.5. */
 const ALL_RATE_STEPS = 10;
 
@@ -99,7 +100,10 @@ export default function SevenView({ character, version, onClose }: { character?:
 	// kept as true, or as '1' (which reads back as 1) by an earlier version
 	const [allRates, setAllRatesState] = useState(() => { const v = load<unknown>(ALL_RATES_KEY, false); return v === true || v === 1; });
 	const setAllRates = (on: boolean) => { setAllRatesState(on); keep(ALL_RATES_KEY, on); };
-	const rates = useMemo(() => rateSteps(allRates ? ALL_RATE_STEPS : progress?.speedUpgrades ?? 0), [allRates, progress?.speedUpgrades]);
+	// the rates your 7K Speed has unlocked (upgrades and prestiges); every rate when ticked, or while
+	// Speed cannot be read yet
+	const speedKnown = progress !== undefined;
+	const rates = useMemo(() => rateSteps(allRates || !speedKnown ? ALL_RATE_STEPS : progress.speedUpgrades), [allRates, speedKnown, progress?.speedUpgrades]);
 	const screened = useMemo(() => screenRates(rates), [rates]);
 	const levelNow = useMemo(() => levelSumNow(attempts, progress), [attempts, progress]);
 	const [failRule, setFailRuleState] = useState<FailRule>(readFailRule);
@@ -391,14 +395,18 @@ export default function SevenView({ character, version, onClose }: { character?:
 				<section className="maps target">
 					<div className="target-form">
 						<p className="hint">
-							Every 7K play is recorded as it finishes, fails included. Base XP leaves out every multiplier (mindblock, fatigue, medals, genes, mods,
-							upgrades), so maps compare fairly. To save plays, some are skipped: a rate that gave 0 XP skips the map&apos;s slower rates, and a fail skips
+							Every 7K play is recorded as it finishes, fails included. Base XP leaves out mindblock, fatigue, medals, mods and your upgrades (genes are kept in), so maps compare fairly. To save plays, some are skipped: a rate that gave 0 XP skips the map&apos;s slower rates, and a fail skips
 							its faster rates and every harder map (x1 stars × rate) until you gain the level-ups set below. Test playlists go easiest first.
 						</p>
 						<div className="target-row">
-							<span className="hint">{maps.length.toLocaleString()} 7K maps downloaded · {rates.length} rates{progress ? '' : ' (your 7K Speed could not be read)'}</span>
-							<label className="strain-filter" title="Every rate from x0.5 to x1.5, not only the ones your 7K Speed has unlocked">
-								<input type="checkbox" checked={allRates} onChange={e => setAllRates(e.target.checked)} /> All rates
+							<span className="hint" title="Each Speed upgrade or prestige unlocks one more rate step (0.05) each way">
+								{maps.length.toLocaleString()} 7K maps ·{' '}
+								{speedKnown
+									? <>7K Speed {progress.speedUpgrades} → <b>x{rates[0]}–x{rates[rates.length - 1]}</b> ({rates.length} rates{allRates ? ', every rate ticked' : ''})</>
+									: <>7K Speed not received yet: every rate for now (x{rates[0]}–x{rates[rates.length - 1]})</>}
+							</span>
+							<label className="strain-filter" title="Every rate from x0.5 to x1.5, past what your 7K Speed has unlocked: to plan ahead">
+								<input type="checkbox" checked={allRates} onChange={e => setAllRates(e.target.checked)} /> Every rate
 							</label>
 							<span className="spacer" />
 							<label className="strain-filter" title="Your medals' XP multiplier, from the Character screen: the same on every skill, so it changes no ranking, only the numbers">

@@ -185,7 +185,7 @@ export default function SevenBox({ version }: { version: number }) {
 							<span className="last-play__lvl">{play.levels[skill] !== undefined ? `Lv ${Number(play.levels[skill]).toFixed(1)}` : ''}</span>
 						</div>
 					))}
-					<div className="last-play__foot">{ago(play.playedAt)} · fatigue, mindblock and multipliers taken out</div>
+					<div className="last-play__foot">{ago(play.playedAt)} · fatigue, mindblock and upgrades taken out; genes kept</div>
 				</>
 			)}
 		</div>

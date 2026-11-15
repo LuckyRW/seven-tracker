@@ -42,7 +42,7 @@ const attempt = (o) => ({ token: String(Math.random()), characterId: 1, beatmapI
 // base XP: fatigue comes off physical skills only, multipliers off each skill
 const tired = attempt({ fatigue: 1, own: { accuracy: 2 }, genetics: { speed: 1.25 } });
 const base = m.baseOf(tired, [tired]);
-check('fatigue taken off a physical skill (x0.05 when exhausted), genetics too', near(base.speed, 100 / (0.05 * 1.25)), base.speed);
+check('fatigue taken off a physical skill (x0.05 when exhausted), genetics left in', near(base.speed, 100 / 0.05), base.speed);
 check('not off accuracy; its own multiplier is', near(base.accuracy, 50), base.accuracy);
 const ez = m.baseOf(attempt({ mods: 'EZ' }), []);
 check('EZ halves XP: base doubles it back', near(ez.speed, 200), ez.speed);

@@ -414,7 +414,9 @@ export const baseOf = (attempt: Attempt, before: readonly Attempt[]): Record<str
 	const mods = parseMods(attempt.mods);
 	const medals = medals7k();
 	return Object.fromEntries(Object.entries(attempt.gains).map(([skill, xp]) => {
-		const by = (attempt.own[skill] || 1) * (attempt.genetics[skill] || 1) * medals * modXp(mods, skill)
+		// genetics stay in: base XP is what the character earns with the genes it has (they are kept,
+		// per play, in `genetics`)
+		const by = (attempt.own[skill] || 1) * medals * modXp(mods, skill)
 			* (MINDBLOCK.has(skill) ? block : 1) * (PHYSICAL.has(skill) ? tired : 1);
 		return [skill, by > 0 ? xp / by : 0];
 	}));
