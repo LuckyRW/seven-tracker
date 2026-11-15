@@ -12,6 +12,7 @@ import { replacePlaylist } from '../engine/playlist.js';
 import {
 	attemptsOf, baseOf, failCeiling, levelSumNow, readFailRule, saveFailRule, type FailRule, MEDALS_KEY, medals7k, progress7k, readBars, recorderStatus, reachOf, ringOrder, screenState, testsOf, totalOf, type ScreenState,
 	type Attempt, type Progress7k,
+	importScores,
 } from '../engine/seven.js';
 import { formatTime, formatXp, NumberField, skillBreakdown, skillLabel, Tip } from './parts.js';
 
@@ -32,6 +33,8 @@ type Measured = {
 	fails: number;
 	/** mean strain minutes added per play, start to the next play's start (less than 0 rests) */
 	drift?: number;
+	/** base XP / s of the pass before the last at this rate */
+	prevPerSecond?: number;
 	/** the level total at its last pass, to tell how far you have come since */
 	levelSum: number;
 	/** whether that total is in play levels (lifetime + prestige) or, for older plays, the Upgrades screen's */
@@ -60,6 +63,23 @@ const keep = (key: string, value: unknown) => { try { localStorage.setItem(key, 
 
 const rowKey = (row: { map: { beatmapId: number }; rate: number }) => `${row.map.beatmapId}@${row.rate}`;
 const signed = (n: number, digits = 1) => `${n > 0 ? '+' : ''}${n.toFixed(digits)}`;
+/** The last pass against the one before it at the same rate: green more, red less, an arrow from 5%. */
+const changeOf = (row: { perSecond: number; prevPerSecond?: number }) =>
+	row.prevPerSecond ? row.perSecond / row.prevPerSecond - 1 : undefined;
+const changeColor = (row: { perSecond: number; prevPerSecond?: number }) => {
+	const c = changeOf(row);
+	return c === undefined || Math.abs(c) < 0.005 ? undefined : c > 0 ? '#4ade80' : '#f87171';
+};
+const changeArrow = (row: { perSecond: number; prevPerSecond?: number }) => {
+	const c = changeOf(row);
+	return c === undefined || Math.abs(c) < 0.05 ? '' : c > 0 ? ' ▲' : ' ▼';
+};
+const changeNote = (row: { perSecond: number; prevPerSecond?: number }) => {
+	const c = changeOf(row);
+	return c === undefined ? '' : `${c >= 0 ? '+' : ''}${(c * 100).toFixed(1)}% on the pass before (${formatXp(row.prevPerSecond ?? 0)} base XP/s)
+`;
+};
+
 /** Levels gained since a pass: how far out of date its numbers may be. */
 const sinceLabel = (n: number) => (n > 0 ? `+${n}` : '0');
 const driftColor = (d?: number) => (d === undefined ? 'var(--faint, #888)' : d > 0 ? '#f87171' : '#38bdf8');
@@ -100,6 +120,15 @@ export default function SevenView({ character, version, onClose }: { character?:
 		void progress7k(Number(character.id)).then(setProgress);
 		setAttempts(attemptsOf(Number(character.id)));
 	}, [character?.id, version]);
+	// plays the recorder missed, from the game's own scores: on opening, then every minute
+	useEffect(() => {
+		if (!character) return;
+		const id = Number(character.id);
+		const take = () => void importScores(id).then(n => { if (n) setAttempts(attemptsOf(id)); });
+		take();
+		const timer = setInterval(take, 60_000);
+		return () => clearInterval(timer);
+	}, [character?.id]);
 
 	const byId = useMemo(() => new Map(maps.map(m => [m.beatmapId, m])), [maps]);
 	// the rates the character's Speed has unlocked, or every rate there is
@@ -159,10 +188,13 @@ export default function SevenView({ character, version, onClose }: { character?:
 				const seconds = map.lengthSec / rate;
 				const [top, topXp] = Object.entries(base).sort((a, b) => b[1] - a[1])[0] ?? ['', 0];
 				const d = drifts.get(`${mapId}@${rate}@`);
+				const before = passes.at(-2);
+				const prevPerSecond = before ? totalOf(baseOf(before, ordered)) / seconds : undefined;
 				rows.push({
 					map, rate, perSecond: totalOf(base) / seconds, skills: Object.fromEntries(Object.entries(base).map(([s, xp]) => [s, xp / seconds])), top, topPerSecond: topXp / seconds,
 					level: top ? last.levels[top] : undefined, at: last.startedAt, plays: list.length, fails: list.length - passes.length, levelSum: last.levelSum, playLevels: last.levelKind === 'play',
 					drift: d?.length ? d.reduce((x, y) => x + y, 0) / d.length : undefined,
+					prevPerSecond,
 				});
 			}
 		}
@@ -345,7 +377,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 											<button aria-label="More times" disabled={times >= MAX_REPEAT} onClick={() => setPicked({ ...picked, [key]: times + 1 })}>+</button>
 										</span>
 									</span>
-									<Tip className="num strong" text={skillBreakdown(row.skills)}>{formatXp(row.perSecond)}</Tip>
+									<Tip className="num strong" text={changeNote(row) + skillBreakdown(row.skills)}><span style={{ color: changeColor(row) }}>{formatXp(row.perSecond)}{changeArrow(row)}</span></Tip>
 									<span className="num" style={{ color: driftColor(row.drift) }}>{row.drift === undefined ? '–' : `${signed(row.drift)}m`}</span>
 									<span className="num muted" title={row.playLevels ? `${levelNow - row.levelSum} play levels (lifetime + prestige) gained since it was last passed` : 'Passed before play levels were kept: counted from the levels on the Upgrades screen, which read lower, so it cannot be counted. Replay it to fix.'}>{row.playLevels ? sinceLabel(levelNow - row.levelSum) : '?'}</span>
 									<button className="icon" aria-label="Remove from the playlist" title="Remove" onClick={() => toggle(key)}>✕</button>
@@ -385,7 +417,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 									<button className={`icon add${on ? ' on' : ''}`} aria-pressed={on} title={on ? 'In your playlist: press to take it out' : 'Add to your playlist'} onClick={() => toggle(key)}>{on ? '✓' : '+'}</button>
 									<MapName map={row.map} rate={row.rate} />
 									<span className="chips"><span className="chip">x{row.rate}</span></span>
-									<Tip className="num strong" text={skillBreakdown(row.skills)}>{formatXp(row.perSecond)}</Tip>
+									<Tip className="num strong" text={changeNote(row) + skillBreakdown(row.skills)}><span style={{ color: changeColor(row) }}>{formatXp(row.perSecond)}{changeArrow(row)}</span></Tip>
 									<span className="num" title={row.level !== undefined ? `played at level ${row.level}` : undefined}>
 										{row.top ? <>{skillLabel(row.top)} <span className="muted">Lv {row.level ?? '?'}</span></> : ''}
 									</span>

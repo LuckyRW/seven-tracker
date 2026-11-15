@@ -268,6 +268,57 @@ const writeAttempts = (all: Attempt[]): boolean => {
 	try { localStorage.setItem(STORE_KEY, JSON.stringify(all.slice(-MAX_ATTEMPTS))); return true; } catch { return false; }
 };
 
+/**
+ * Plays the recorder never saw (before it was installed, or while it was not running), taken from
+ * the game's own database: `score` (map, rate, mods, accuracy, when) joined to `score_xp` (XP per
+ * skill). Only passes are saved there, and without the character's levels or multipliers at the
+ * time: they are kept like plays whose progress could not be read (today's multipliers, levels
+ * since unknown). A score is matched to a recorded play of the same map and rate that started at
+ * most 30 minutes before it; the newest scores are left a while for the recorder to take first.
+ * Returns how many were added.
+ */
+export const importScores = async (characterId: number): Promise<number> => {
+	let rows: { id: number; beatmapId: number; playedAt: number; rate: number; mods: string; accuracy: number; gains: string }[];
+	try {
+		await gameDb.ready();
+		rows = await gameDb.select(
+			`SELECT s.id AS id, s.beatmapId AS beatmapId, s.playedAt AS playedAt, s.rate AS rate, s.mods AS mods, s.accuracy AS accuracy, x.gains AS gains
+			 FROM score s JOIN score_xp x ON x.scoreId = s.id WHERE s.characterId = ? ORDER BY s.playedAt`, [characterId]);
+	} catch (err) { console.warn('[7K tracker] the scores could not be read:', err); return 0; }
+	const all = readAttempts();
+	const imported = new Set(all.filter(a => a.token.startsWith('score:')).map(a => a.token));
+	const used = new Set<string>();
+	const live = all.filter(a => !a.failed && !a.token.startsWith('score:'));
+	const fresh = Date.now() - 2 * 60_000;
+	let added = 0;
+	for (const r of rows) {
+		const token = `score:${r.id}`;
+		if (imported.has(token) || Number(r.playedAt) > fresh) continue;
+		let gains: Record<string, number> = {};
+		try { gains = JSON.parse(String(r.gains || '{}')) as Record<string, number>; } catch { continue; }
+		if (!Object.keys(gains).some(k => ONLY_7K.has(k) && gains[k] > 0)) continue;
+		const rate = round2(Number(r.rate) || 1);
+		const at = Number(r.playedAt);
+		// the recorded play it is, if any: the latest of that map and rate started before it
+		const match = live
+			.filter(a => !used.has(a.token) && a.beatmapId === Number(r.beatmapId) && round2(a.rate) === rate && a.startedAt <= at && at - a.startedAt < 30 * 60_000)
+			.at(-1);
+		if (match) { used.add(match.token); continue; }
+		all.push({
+			token, characterId, beatmapId: Number(r.beatmapId), rate, mods: modsKey(parseMods(String(r.mods ?? ''))),
+			startedAt: at, fatigue: 0, failed: false, accuracy: accuracyOf(r.accuracy), gains,
+			levels: {}, levelSum: 0, levelKind: 'upgrades', own: {}, genetics: {},
+		});
+		added++;
+	}
+	if (added) {
+		all.sort((a, b) => a.startedAt - b.startedAt);
+		writeAttempts(all);
+		console.info(`[7K tracker] ${added} 7K plays taken from the game's scores`);
+	}
+	return added;
+};
+
 /** The medals' multiplier: the same on every skill, so it changes no ranking; typed in by the player. */
 export const MEDALS_KEY = 'oss-idle-sim:7k-medals';
 export const medals7k = (): number => {
