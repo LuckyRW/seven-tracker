@@ -41,7 +41,7 @@ type Measured = {
 	playLevels: boolean;
 };
 
-type Tab = 'playlist' | 'maps' | 'testing';
+type Tab = 'playlist' | 'maps' | 'recent' | 'testing';
 
 const MAX_ENTRIES_DEFAULT = 200;
 const MAX_REPEAT = 100;
@@ -52,6 +52,7 @@ const PICKED_KEY = 'seven-tracker:picked';
 const ORDER_KEY = 'seven-tracker:picked-order';
 const TAB_KEY = 'seven-tracker:tab';
 const MIX_KEY = 'seven-tracker:mix';
+const RECENT_SHOWN = 100;
 /** Every rate, not only Speed's: off unless ticked (a new key, so it starts off once Speed can be read). */
 const ALL_RATES_KEY = 'seven-tracker:every-rate';
 /** Speed unlocks that open every rate, x0.5 to x1.5. */
@@ -203,6 +204,8 @@ export default function SevenView({ character, version, onClose }: { character?:
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [tests, byId, attempts, medals]);
 	const byKey = useMemo(() => new Map(measured.map(r => [rowKey(r), r])), [measured]);
+	const ordered = useMemo(() => [...attempts].sort((a, b) => a.startedAt - b.startedAt), [attempts]);
+	const recent = useMemo(() => ordered.slice(-RECENT_SHOWN).reverse(), [ordered]);
 
 	// ---- your playlist ----
 	const [picked, setPickedState] = useState<Record<string, number>>(() => load(PICKED_KEY, {}));
@@ -351,6 +354,9 @@ export default function SevenView({ character, version, onClose }: { character?:
 					<button className={tab === 'maps' ? 'on' : ''} onClick={() => setTab('maps')}>
 						All maps {!!measured.length && <span className="count">{measured.length}</span>}
 					</button>
+					<button className={tab === 'recent' ? 'on' : ''} onClick={() => setTab('recent')}>
+						Recent
+					</button>
 					<button className={tab === 'testing' ? 'on' : ''} onClick={() => setTab('testing')}>
 						Testing
 					</button>
@@ -405,6 +411,38 @@ export default function SevenView({ character, version, onClose }: { character?:
 							);
 						})}
 						{!rotation.length && <p className="empty">No maps yet. Open All maps and press + on the ones you want; set how many times each repeats here.</p>}
+					</div>
+				</section>
+			)}
+
+			{tab === 'recent' && (
+				<section className="maps">
+					<div className="maps-tools">
+						<span className="hint">Your last {RECENT_SHOWN} 7K plays, newest first. <b>live</b>: recorded as it finished, with your levels; <b>no progress</b>: recorded, but your levels could not be read; <b>imported</b>: taken later from the game's scores</span>
+					</div>
+					<div className="rows">
+						<div className="row seven-recent head">
+							<span>When</span><span>Map</span><span>Rate</span><span className="num">Acc</span><span className="num">XP</span><span className="num">Base XP/s</span><span className="num">From</span>
+						</div>
+						{recent.map(a => {
+							const map = byId.get(a.beatmapId);
+							const xp = totalOf(a.gains);
+							const base = map ? baseOf(a, ordered) : {};
+							const seconds = map ? map.lengthSec / a.rate : 0;
+							const from = a.token.startsWith('score:') ? 'imported' : a.levelKind === 'play' ? 'live' : 'no progress';
+							return (
+								<div className="row seven-recent" key={a.token}>
+									<span className="muted" title={new Date(a.startedAt).toLocaleString()}>{new Date(a.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+									{map ? <MapName map={map} rate={a.rate} /> : <span className="muted">map {a.beatmapId}</span>}
+									<span className="chips"><span className="chip">x{a.rate}{a.mods ? ` +${a.mods.replace(/,/g, '')}` : ''}</span></span>
+									<span className="num" style={{ color: a.failed ? '#f87171' : undefined }}>{a.failed ? 'fail' : a.accuracy !== undefined ? `${(a.accuracy * 100).toFixed(2)}%` : '–'}</span>
+									<Tip className="num" text={Object.entries(a.gains).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${skillLabel(k)}: ${Math.round(v).toLocaleString()}`).join(String.fromCharCode(10))}>{formatXp(xp)}</Tip>
+									<Tip className="num strong" text={seconds ? skillBreakdown(Object.fromEntries(Object.entries(base).map(([k, v]) => [k, v / seconds]))) : undefined}>{seconds && !a.failed ? formatXp(totalOf(base) / seconds) : '–'}</Tip>
+									<span className="num" style={{ color: from === 'live' ? '#4ade80' : from === 'imported' ? '#60a5fa' : '#fbbf24' }}>{from}</span>
+								</div>
+							);
+						})}
+						{!recent.length && <p className="empty">No 7K plays recorded yet.</p>}
 					</div>
 				</section>
 			)}
