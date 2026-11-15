@@ -19,7 +19,7 @@
  * against oss!idle 1.3, which has no 7K.
  */
 
-import { gameDb, type CharacterRow } from '@oss-idle/addon-sdk';
+import { beatmapStore, gameDb, type CharacterRow } from '@oss-idle/addon-sdk';
 import cubic_bezier from '@oss-idle/shared/math/cubic_bezier';
 import lerp from '@oss-idle/shared/math/lerp';
 import { modsKey, parseMods, type Mod } from '@oss-idle/shared/mods';
@@ -382,6 +382,11 @@ export const recordPlays = (
 	const done = new Set<string>();
 	const hooked = new WeakSet<WebSocket>();
 	const sockets: WebSocket[] = [];
+	/** every 7K map's id, to tell a fail whose start was missed */
+	const sevenMaps = new Set<number>();
+	void beatmapStore.difficulties()
+		.then(list => { for (const { version: v } of list) if (v.mode === 3 && v.keys === 7) sevenMaps.add(v.id); })
+		.catch(() => undefined);
 
 	let lastId: number | undefined;
 	/** plays seen running in the server's checkpoints, by token */
@@ -393,9 +398,11 @@ export const recordPlays = (
 	 */
 	const unstarted = (token: string, result: Record<string, unknown>): Started | undefined => {
 		const gains = (result.gains ?? []) as { skill: string }[];
-		if (!gains.some(g => ONLY_7K.has(g.skill))) return undefined;
 		const score = result.score as { beatmapId?: number; rate?: number; mods?: Mod[] } | undefined;
 		const state = seen.get(token);
+		// a fail gives no XP and names no ruleset: a 7K play when its map, from the server's checkpoints, has 7 keys
+		const sevenFail = result.failed === true && state !== undefined && sevenMaps.has(state.beatmapId);
+		if (!sevenFail && !gains.some(g => ONLY_7K.has(g.skill))) return undefined;
 		const beatmapId = score?.beatmapId ?? state?.beatmapId;
 		const id = characterId() ?? lastId;
 		if (!beatmapId || id === undefined) { console.warn(`[7K tracker] 7K result ${token.slice(0, 6)} not recorded: ${beatmapId ? 'no character yet' : 'its map is unknown'}`); return undefined; }
