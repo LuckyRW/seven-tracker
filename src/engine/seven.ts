@@ -23,6 +23,7 @@ import { gameDb, type CharacterRow } from '@oss-idle/addon-sdk';
 import cubic_bezier from '@oss-idle/shared/math/cubic_bezier';
 import lerp from '@oss-idle/shared/math/lerp';
 import { modsKey, parseMods, type Mod } from '@oss-idle/shared/mods';
+import { playLevelOf } from '@oss-idle/shared/xp';
 
 export const RULESET_7K = 'mania7k';
 export const SKILLS_7K = ['accuracy', 'speed', 'stamina', 'jacks', 'independence', 'ln', 'technical', 'focus', 'sv', 'memory'] as const;
@@ -100,7 +101,7 @@ type Row = Record<string, number | string>;
 /** The 7K character the server last sent (`character` on the game's socket: on connecting, and
  *  whenever it changes), kept so the progress is known before the next one comes. */
 const SENT_KEY = 'seven-tracker:character';
-type SentSkill = { level: number; xp: number; upgrades: number; overdrive: number; prestige: number };
+type SentSkill = { level: number; xp: number; upgrades: number; overdrive: number; prestige: number; lifetimeXp?: number };
 type Sent = { id: number; skills: Record<string, SentSkill>; genetics?: unknown; at: number };
 
 /** Keep a `character` message's character when it is in 7K. */
@@ -118,7 +119,7 @@ const sentRow = (characterId: number): Row | undefined => {
 	const row: Row = { characterId, geneticsJson: sent.genetics ? JSON.stringify(sent.genetics) : '' };
 	for (const [skill, p] of Object.entries(sent.skills)) {
 		row[skill] = p.level; row[`${skill}XP`] = p.xp; row[`${skill}Upgrades`] = p.upgrades;
-		row[`${skill}Overdrive`] = p.overdrive; row[`${skill}Prestige`] = p.prestige;
+		row[`${skill}Overdrive`] = p.overdrive; row[`${skill}Prestige`] = p.prestige; row[`${skill}LifetimeXp`] = p.lifetimeXp ?? 0;
 	}
 	return row;
 };
@@ -151,7 +152,9 @@ export const progress7k = async (characterId: number): Promise<Progress7k | unde
 	const row = await progressRow(characterId);
 	if (!row) return undefined;
 	const num = (key: string) => Number(row[key]) || 0;
-	const levels = Object.fromEntries(SKILLS_7K.map(s => [s, num(s)]));
+	// each skill's play level: its lifetime XP's level plus its prestige, as the game shows it. Unlike
+	// the Upgrades screen's level, buying an upgrade never takes it down
+	const levels = Object.fromEntries(SKILLS_7K.map(s => [s, Math.floor(playLevelOf(num(s), num(`${s}XP`), num(`${s}LifetimeXp`), num(`${s}Prestige`)))]));
 	return {
 		levels,
 		own: Object.fromEntries(SKILLS_7K.map(s => [s, skillXPMultiplier(num(`${s}Upgrades`), num(`${s}Overdrive`), num(`${s}Prestige`))])),
@@ -188,6 +191,8 @@ export type Attempt = {
 	levelSum: number;
 	/** the level total after it: its result's levels, for when the 7K progress cannot be read */
 	levelSumAfter?: number;
+	/** which levels these are: play levels (lifetime + prestige, never down), or the Upgrades screen's (older plays) */
+	levelKind?: 'play' | 'upgrades';
 	own: Record<string, number>;
 	genetics: Record<string, number>;
 };
@@ -344,7 +349,14 @@ export const recordPlays = (
 			done.add(msg.token);
 			started.delete(msg.token);
 			const gains = (msg.result.gains ?? []) as { skill: string; gained: number; fromLevel: number; toLevel?: number }[];
-			const levels = { ...play.progress?.levels, ...Object.fromEntries(gains.map(g => [g.skill, g.fromLevel])) };
+			// play levels (lifetime + prestige) from the character at the start; without it, the result's
+			// own levels, which are the Upgrades screen's
+			const playLevels = play.progress !== undefined;
+			const levels = playLevels
+				? { ...play.progress?.levels }
+				: Object.fromEntries(gains.map(g => [g.skill, g.fromLevel]));
+			const levelSum = Object.values(levels).reduce((a, b) => a + Number(b), 0);
+			const gainedLevels = gains.reduce((sum, g) => sum + Math.max(0, (g.toLevel ?? g.fromLevel) - g.fromLevel), 0);
 			const all = readAttempts();
 			all.push({
 				token: msg.token,
@@ -353,8 +365,9 @@ export const recordPlays = (
 				accuracy: accuracyOf((msg.result.score as { accuracy?: unknown } | undefined)?.accuracy),
 				gains: Object.fromEntries(gains.filter(g => g.gained > 0).map(g => [g.skill, g.gained])),
 				levels,
-				levelSum: Object.values(levels).reduce((a, b) => a + Number(b), 0),
-				levelSumAfter: Object.values({ ...levels, ...Object.fromEntries(gains.map(g => [g.skill, g.toLevel ?? g.fromLevel])) }).reduce((a, b) => a + Number(b), 0),
+				levelSum,
+				levelSumAfter: levelSum + gainedLevels,
+				levelKind: playLevels ? 'play' : 'upgrades',
 				own: play.progress?.own ?? {},
 				genetics: play.progress?.genetics ?? {},
 			});

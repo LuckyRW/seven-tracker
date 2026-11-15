@@ -91,8 +91,15 @@ check('the screening grid: every third, x1 and the fastest',
 	check('a 7K character message is kept', kept === true);
 	check('a 4K one is not', m.noteCharacter({ id: 63, ruleset: 'mania4k', skills: {} }) === false);
 	const p = await m.progress7k(63);
-	check('progress reads the sent character', p?.levels.speed === 12 && p?.levels.jacks === 5, JSON.stringify(p?.levels));
+	check('progress reads the sent character as play levels (prestige added)', p?.levels.speed === 13 && p?.levels.jacks === 5, JSON.stringify(p?.levels));
 	check('speed unlocks count upgrades and prestige', p?.speedUpgrades === 2);
+	// play levels: an upgrade dropped speed's Upgrades level to 2, but its lifetime XP is still level 12's
+	m.noteCharacter({ id: 64, ruleset: 'mania7k', skills: { speed: { level: 2, xp: 0, upgrades: 1, overdrive: 1, prestige: 1, lifetimeXp: 0 } } });
+	const q = await m.progress7k(64);
+	check('a skill with no lifetime XP plays at its level plus prestige', q?.levels.speed === 3, JSON.stringify(q?.levels));
+	m.noteCharacter({ id: 65, ruleset: 'mania7k', skills: { speed: { level: 2, xp: 0, upgrades: 1, overdrive: 1, prestige: 0, lifetimeXp: 1e6 } } });
+	const r = await m.progress7k(65);
+	check('lifetime XP keeps the play level up after an upgrade', (r?.levels.speed ?? 0) > 2, JSON.stringify(r?.levels));
 }
 
 // screening: x1 first, then a step slower, a step faster...; slower only while XP/s rose; faster while passing
