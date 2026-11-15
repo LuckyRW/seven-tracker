@@ -51,6 +51,7 @@ const PICKED_KEY = 'seven-tracker:picked';
 /** The order they were picked in: the playlist plays them in it. */
 const ORDER_KEY = 'seven-tracker:picked-order';
 const TAB_KEY = 'seven-tracker:tab';
+const MIX_KEY = 'seven-tracker:mix';
 /** Every rate, not only Speed's: off unless ticked (a new key, so it starts off once Speed can be read). */
 const ALL_RATES_KEY = 'seven-tracker:every-rate';
 /** Speed unlocks that open every rate, x0.5 to x1.5. */
@@ -267,15 +268,19 @@ export default function SevenView({ character, version, onClose }: { character?:
 	}, [measured, everyRate, driftFilter, query]);
 
 	/** each difficulty at its best rate, best first */
-	const bestTen = useMemo(() => {
+	const bestRows = useMemo(() => {
 		const seen = new Set<number>();
-		return measured.filter(r => !seen.has(r.map.beatmapId) && (seen.add(r.map.beatmapId), true)).slice(0, 10);
+		return measured.filter(r => !seen.has(r.map.beatmapId) && (seen.add(r.map.beatmapId), true));
 	}, [measured]);
+	const bestTen = bestRows.slice(0, 10);
 	const tenth = bestTen.length >= 10 ? bestTen[9].perSecond : undefined;
 
 	// ---- testing ----
 	const [testName, setTestName] = useState('7K tests');
 	const [maxEntries, setMaxEntries] = useState(MAX_ENTRIES_DEFAULT);
+	/** mixed screening: a farm map after every `every` tests, the best `top` in turn */
+	const [mix, setMixState] = useState<{ every: number; top: number }>(() => load(MIX_KEY, { every: 10, top: 3 }));
+	const setMix = (next: { every: number; top: number }) => { setMixState(next); keep(MIX_KEY, next); };
 	const counts = useMemo(() => {
 		const n = { open: 0, tested: 0, waiting: 0, out: 0 };
 		for (const m of maps) {
@@ -290,7 +295,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 		return n;
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [maps, rings, tests, ceiling, byKey, failRule, levelNow, reach]);
-	const saveTests = async (kind: 'x1' | 'screen') => {
+	const saveTests = async (kind: 'x1' | 'screen' | 'mixed') => {
 		// maps easiest first by their x1 stars, ring by ring: every map at x1, then every map a step
 		// slower, then a step faster... A ring's maps are in only once the ring before was played for
 		// them: rebuild the playlist as results come in.
@@ -302,12 +307,27 @@ export default function SevenView({ character, version, onClose }: { character?:
 				if (st === 'open' || st === 'retest') entries.push({ beatmapId: m.beatmapId, rate });
 			}
 		}
-		const kept = entries.slice(0, maxEntries);
+		let kept = entries.slice(0, maxEntries);
+		// mixed: after every `every` tests, the next of your best maps (top 1, top 2, ... top N, then top 1 again)
+		const farm = bestRows.slice(0, Math.max(1, mix.top));
+		if (kind === 'mixed' && farm.length && entries.length) {
+			const every = Math.max(1, mix.every);
+			const out: typeof entries = [];
+			let next = 0;
+			for (let i = 0; i < entries.length && out.length < maxEntries; i++) {
+				out.push(entries[i]);
+				if ((i + 1) % every === 0 && out.length < maxEntries) {
+					const f = farm[next++ % farm.length];
+					out.push({ beatmapId: f.map.beatmapId, rate: f.rate });
+				}
+			}
+			kept = out;
+		}
 		if (!kept.length) { setSaved('Nothing left to test there.'); return; }
 		setSaved('Saving...');
 		try {
 			const { created } = await replacePlaylist(testName, kept.map(e => ({ ...e, mods: [] })));
-			setSaved(`${created ? 'Created' : 'Updated'} "${testName}" with ${kept.length} plays${entries.length > kept.length ? ` (of ${entries.length})` : ''}. Reopen song select to see it.`);
+			setSaved(`${created ? 'Created' : 'Updated'} "${testName}" with ${kept.length} plays${kind !== 'mixed' && entries.length > kept.length ? ` (of ${entries.length})` : ''}. Reopen song select to see it.`);
 		} catch (e) {
 			setSaved(e instanceof Error ? e.message : String(e));
 		}
@@ -508,6 +528,19 @@ export default function SevenView({ character, version, onClose }: { character?:
 							</label>
 							<button disabled={!maps.length} onClick={() => void saveTests('x1')} title="Every 7K map not yet tested at x1">Untested at x1</button>
 							<button disabled={!maps.length} onClick={() => void saveTests('screen')} title="Every map and rate open now, ring by ring from x1 outwards, maps easiest first: press again after playing to take in the results">Screening</button>
+						</div>
+						<div className="target-row">
+							<label className="strain-filter" title="Screening with a farm map mixed in: after this many tests, one of your best maps by base XP/s">
+								Mixed: after every
+								<NumberField aria-label="Tests between farm maps" min={1} max={200} integer value={mix.every} onChange={v => setMix({ ...mix, every: v })} />
+								tests, play your top
+								<NumberField aria-label="Best maps to cycle through" min={1} max={50} integer value={mix.top} onChange={v => setMix({ ...mix, top: v })} />
+								in turn (top 1, top 2 ... then top 1 again)
+							</label>
+							<button disabled={!maps.length || !bestRows.length} onClick={() => void saveTests('mixed')}
+								title={bestRows.length ? `Screening, with ${bestRows.slice(0, mix.top).map(r => `${r.map.title} [${r.map.version}] x${r.rate}`).join(', ')} mixed in` : 'No passes yet to farm'}>
+								Mixed screening
+							</button>
 						</div>
 					</div>
 				</section>
