@@ -234,6 +234,13 @@ export default function SevenView({ character, version, onClose }: { character?:
 		return list;
 	}, [measured, everyRate, driftFilter, query]);
 
+	/** each difficulty at its best rate, best first */
+	const bestTen = useMemo(() => {
+		const seen = new Set<number>();
+		return measured.filter(r => !seen.has(r.map.beatmapId) && (seen.add(r.map.beatmapId), true)).slice(0, 10);
+	}, [measured]);
+	const tenth = bestTen.length >= 10 ? bestTen[9].perSecond : undefined;
+
 	// ---- testing ----
 	const [testName, setTestName] = useState('7K tests');
 	const [maxEntries, setMaxEntries] = useState(MAX_ENTRIES_DEFAULT);
@@ -314,6 +321,8 @@ export default function SevenView({ character, version, onClose }: { character?:
 								: 'Empty: add maps with + in All maps.'}
 						</Tip>
 						<span className="spacer" />
+						<button disabled={!bestTen.length} onClick={() => setPicked(Object.fromEntries(bestTen.map(r => [rowKey(r), 1])))}
+							title="Replace the playlist with your 10 best maps by base XP/s, each at its best rate">Top 10</button>
 						<button disabled={!rotation.length} onClick={() => setPicked({})}>Clear</button>
 						<button className="primary" disabled={!rotation.length} onClick={() => void savePicked()} title="Save these maps, each at its rate and repeats, as a game playlist">Save playlist</button>
 					</div>
@@ -448,6 +457,16 @@ export default function SevenView({ character, version, onClose }: { character?:
 									onChange={v => setFailRule({ ...failRule, reachMargin: v })} />
 								★ above your hardest pass{Number.isFinite(reach) ? ` (up to ${reach.toFixed(2)}★)` : ''}
 							</label>
+							<label className="strain-filter" title="A map passed at or over the accuracy bar that gave under this base XP/s will not give more slower: its slower rates are not screened. 0 turns it off.">
+								Skip slower rates of clean passes under
+								<NumberField aria-label="Base XP/s a clean pass needs" min={0} max={1000} value={failRule.minXps ?? 0}
+									onChange={v => setFailRule({ ...failRule, minXps: v })} />
+								base XP/s
+							</label>
+							<button disabled={tenth === undefined} onClick={() => tenth !== undefined && setFailRule({ ...failRule, minXps: Math.floor(tenth * 10) / 10 })}
+								title="Set it to your 10th best map's base XP/s: anything under it would not make a top 10 playlist">
+								Use 10th best{tenth !== undefined ? ` (${formatXp(tenth)})` : ''}
+							</button>
 						</div>
 						<div className="target-row">
 							<input aria-label="Test playlist name" value={testName} onChange={e => setTestName(e.target.value)} />

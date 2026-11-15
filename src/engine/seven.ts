@@ -559,8 +559,10 @@ export type FailRule = {
 	minAccuracy: number;
 	/** screen nothing more than this many stars (x1 stars × rate) above the hardest pass */
 	reachMargin: number;
+	/** base XP/s a clean pass (at or over `minAccuracy`) must give for slower rates of that map to be screened; 0 is off */
+	minXps: number;
 };
-export const DEFAULT_FAIL_RULE: FailRule = { liftAfter: 5, resetAt: 0, minAccuracy: 95, reachMargin: 2 };
+export const DEFAULT_FAIL_RULE: FailRule = { liftAfter: 5, resetAt: 0, minAccuracy: 95, reachMargin: 2, minXps: 0 };
 const FAIL_RULE_KEY = 'seven-tracker:fail-rule';
 export const readFailRule = (): FailRule => {
 	try { return { ...DEFAULT_FAIL_RULE, ...JSON.parse(localStorage.getItem(FAIL_RULE_KEY) ?? '{}') as Partial<FailRule> }; } catch { return DEFAULT_FAIL_RULE; }
@@ -641,6 +643,8 @@ export type ScreenState =
 	| 'waiting'
 	/** the rate a step faster gave less XP/s than the one faster still: slower only gets worse */
 	| 'slower is worse'
+	/** a faster rate was passed cleanly (at the accuracy bar) and still gave too little XP/s */
+	| 'too little XP'
 	/** a rate at or above it gave 0 XP */
 	| '0 XP'
 	/** failed here, and not enough level-ups since */
@@ -695,6 +699,13 @@ export const screenState = (t: MapTests | undefined, rate: number, c: ScreenCont
 		return low && c.levelSum - last.levelSum >= Math.max(1, c.rule.liftAfter) ? 'retest' : 'tested';
 	}
 	if (t?.easyAt !== undefined && r < t.easyAt) return '0 XP';
+	// a faster rate played cleanly that still gave too little: slower plays it no better
+	if (c.rule.minXps > 0 && t) for (const [x, list] of t.byRate) {
+		if (x <= r) continue;
+		const clean = list.filter(a => !a.failed).at(-1);
+		const xps = clean && c.xpsAt(x);
+		if (clean?.accuracy !== undefined && clean.accuracy * 100 >= c.rule.minAccuracy && xps !== undefined && xps < c.rule.minXps) return 'too little XP';
+	}
 	const reach = c.reach ?? Infinity;
 	if (c.stars * r > reach + 1e-9) return 'out of reach';
 	if (at(r).some(a => failHolds(a, c.levelSum, c.rule))) return 'failed';
