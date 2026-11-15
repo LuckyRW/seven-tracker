@@ -195,7 +195,7 @@ export default function SevenBox({ version }: { version: number }) {
 							<span className="last-play__lvl">{play.levels[skill] !== undefined ? `Lv ${Number(play.levels[skill]).toFixed(1)}` : ''}</span>
 						</div>
 					))}
-					<div className="last-play__foot">{ago(play.playedAt)} · <b title="7K levels gained since this pass: the higher, the more out of date it is">{play.since > 0 ? `+${play.since} levels since` : 'no levels since'}{play.playLevels ? '' : ' (older play: too high, replay to fix)'}</b> · fatigue, mindblock and upgrades taken out; genes kept</div>
+					<div className="last-play__foot">{ago(play.playedAt)} · <b title="7K levels gained since this pass: the higher, the more out of date it is">{!play.playLevels ? 'levels since unknown (replay to fix)' : play.since > 0 ? `+${play.since} levels since` : 'no levels since'}</b> · fatigue, mindblock and upgrades taken out; genes kept</div>
 				</>
 			)}
 		</div>

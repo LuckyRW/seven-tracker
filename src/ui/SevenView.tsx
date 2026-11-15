@@ -338,7 +338,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 									</span>
 									<Tip className="num strong" text={skillBreakdown(row.skills)}>{formatXp(row.perSecond)}</Tip>
 									<span className="num" style={{ color: driftColor(row.drift) }}>{row.drift === undefined ? '–' : `${signed(row.drift)}m`}</span>
-									<span className="num muted" title={row.playLevels ? `${levelNow - row.levelSum} play levels (lifetime + prestige) gained since it was last passed` : 'Passed before play levels were kept: counted from the levels on the Upgrades screen, which read lower, so this is too high. Replay it to fix.'}>{sinceLabel(levelNow - row.levelSum)}{row.playLevels ? '' : '*'}</span>
+									<span className="num muted" title={row.playLevels ? `${levelNow - row.levelSum} play levels (lifetime + prestige) gained since it was last passed` : 'Passed before play levels were kept: counted from the levels on the Upgrades screen, which read lower, so it cannot be counted. Replay it to fix.'}>{row.playLevels ? sinceLabel(levelNow - row.levelSum) : '?'}</span>
 									<button className="icon" aria-label="Remove from the playlist" title="Remove" onClick={() => toggle(key)}>✕</button>
 								</div>
 							);
@@ -381,7 +381,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 										{row.top ? <>{skillLabel(row.top)} <span className="muted">Lv {row.level ?? '?'}</span></> : ''}
 									</span>
 									<span className="num" style={{ color: driftColor(row.drift) }}>{row.drift === undefined ? '–' : `${signed(row.drift)}m`}</span>
-									<span className="num muted" title={row.playLevels ? `${levelNow - row.levelSum} play levels (lifetime + prestige) gained since it was last passed` : 'Passed before play levels were kept: counted from the levels on the Upgrades screen, which read lower, so this is too high. Replay it to fix.'}>{sinceLabel(levelNow - row.levelSum)}{row.playLevels ? '' : '*'}</span>
+									<span className="num muted" title={row.playLevels ? `${levelNow - row.levelSum} play levels (lifetime + prestige) gained since it was last passed` : 'Passed before play levels were kept: counted from the levels on the Upgrades screen, which read lower, so it cannot be counted. Replay it to fix.'}>{row.playLevels ? sinceLabel(levelNow - row.levelSum) : '?'}</span>
 									<span className="num muted" title={`last played ${new Date(row.at).toLocaleString()}`}>{row.plays}{row.fails ? ` (${row.fails}✗)` : ''}</span>
 								</div>
 							);

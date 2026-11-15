@@ -439,6 +439,20 @@ export const recordPlays = (
 			if (!kept) { recorderStatus.problem = 'the browser refused to store more: storage is full'; console.warn('[7K tracker] 7K play not stored: localStorage full'); }
 			else { recorderStatus.recorded++; recorderStatus.problem = ''; console.info(`[7K tracker] 7K play recorded: ${play.beatmapId} x${play.rate}${msg.result.failed ? ' (failed)' : ''}`); }
 			onAttempt();
+			// no progress at all: read it now, after the play, and count the play from there (its
+			// levels a play late, but the same kind as every other row's)
+			if (!playLevels) {
+				const token = msg.token;
+				void progress7k(play.characterId).then(p => {
+					if (!p) return;
+					const list = readAttempts();
+					const a = list.find(x => x.token === token);
+					if (!a) return;
+					Object.assign(a, { levels: { ...p.levels }, levelSum: p.levelSum, levelSumAfter: undefined, levelKind: 'play', own: p.own, genetics: p.genetics });
+					writeAttempts(list);
+					onAttempt();
+				}).catch(() => undefined);
+			}
 		} else if (msg.type === 'play:aborted' && msg.token) {
 			started.delete(msg.token);
 		}
