@@ -10,10 +10,10 @@ import { beatmapStore, type CharacterRow } from '@oss-idle/addon-sdk';
 import { rateSteps } from '@oss-idle/shared/rate';
 import { replacePlaylist } from '../engine/playlist.js';
 import {
-	attemptsOf, baseOf, failCeiling, levelSumNow, readFailRule, saveFailRule, type FailRule, MEDALS_KEY, medals7k, progress7k, readBars, recorderStatus, screenRates, statusOf, testsOf, totalOf,
+	attemptsOf, baseOf, failCeiling, levelSumNow, readFailRule, saveFailRule, type FailRule, MEDALS_KEY, medals7k, progress7k, readBars, recorderStatus, ringOrder, screenState, testsOf, totalOf, type ScreenState,
 	type Attempt, type Progress7k,
 } from '../engine/seven.js';
-import { formatTime, formatXp, NumberField, skillBreakdown, skillLabel } from './parts.js';
+import { formatTime, formatXp, NumberField, skillBreakdown, skillLabel, Tip } from './parts.js';
 
 type Map7k = { beatmapId: number; title: string; artist: string; version: string; difficulty: number; lengthSec: number };
 
@@ -104,7 +104,8 @@ export default function SevenView({ character, version, onClose }: { character?:
 	// Speed cannot be read yet
 	const speedKnown = progress !== undefined;
 	const rates = useMemo(() => rateSteps(allRates || !speedKnown ? ALL_RATE_STEPS : progress.speedUpgrades), [allRates, speedKnown, progress?.speedUpgrades]);
-	const screened = useMemo(() => screenRates(rates), [rates]);
+	// every unlocked rate, screened from x1 outwards: x1, a step slower, a step faster, two slower...
+	const rings = useMemo(() => ringOrder(rates), [rates]);
 	const levelNow = useMemo(() => levelSumNow(attempts, progress), [attempts, progress]);
 	const [failRule, setFailRuleState] = useState<FailRule>(readFailRule);
 	const setFailRule = (rule: FailRule) => { setFailRuleState(rule); saveFailRule(rule); };
@@ -112,7 +113,10 @@ export default function SevenView({ character, version, onClose }: { character?:
 	// a fail rules out every harder map and rate too, until a skill levels up
 	const ceiling = useMemo(() => failCeiling(attempts, levelNow, id => byId.get(id)?.difficulty, failRule), [attempts, levelNow, byId, failRule]);
 	const holding = attempts.filter(a => a.failed && a.startedAt > failRule.resetAt && levelNow - a.levelSum < Math.max(1, failRule.liftAfter)).length;
-	const statusAt = (m: Map7k, rate: number) => statusOf(tests.get(`${m.beatmapId}|`), rate, m.difficulty * rate, ceiling);
+	const stateAt = (m: Map7k, rate: number): ScreenState => screenState(tests.get(`${m.beatmapId}|`), rate, {
+		levelSum: levelNow, rule: failRule, stars: m.difficulty, ceiling,
+		xpsAt: r => byKey.get(`${m.beatmapId}@${Math.round(r * 100) / 100}`)?.perSecond,
+	});
 
 	const measured = useMemo(() => {
 		const rows: Measured[] = [];
@@ -225,46 +229,32 @@ export default function SevenView({ character, version, onClose }: { character?:
 	// ---- testing ----
 	const [testName, setTestName] = useState('7K tests');
 	const [maxEntries, setMaxEntries] = useState(MAX_ENTRIES_DEFAULT);
-	const [refineMaps, setRefineMaps] = useState(20);
 	const counts = useMemo(() => {
-		let untested = 0, ruledOut = 0, tested = 0;
+		const n = { open: 0, tested: 0, waiting: 0, out: 0 };
 		for (const m of maps) {
-			for (const rate of screened) {
-				const s = statusAt(m, rate);
-				if (s === 'untested') untested++;
-				else if (s === 'too easy' || s === 'too hard') ruledOut++;
-				else tested++;
+			for (const rate of rings) {
+				const st = stateAt(m, rate);
+				if (st === 'open' || st === 'retest') n.open++;
+				else if (st === 'tested') n.tested++;
+				else if (st === 'waiting') n.waiting++;
+				else n.out++;
 			}
 		}
-		return { untested, ruledOut, tested };
+		return n;
 	// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [maps, screened, tests, ceiling]);
-	const saveTests = async (kind: 'x1' | 'screen' | 'refine') => {
+	}, [maps, rings, tests, ceiling, byKey, failRule, levelNow]);
+	const saveTests = async (kind: 'x1' | 'screen') => {
+		// maps easiest first by their x1 stars, ring by ring: every map at x1, then every map a step
+		// slower, then a step faster... A ring's maps are in only once the ring before was played for
+		// them: rebuild the playlist as results come in.
+		const ordered = [...maps].sort((a, b) => a.difficulty - b.difficulty);
 		const entries: { beatmapId: number; rate: number }[] = [];
-		const open = (id: number, rate: number) => { const m = byId.get(id); return !!m && statusAt(m, rate) === 'untested'; };
-		if (kind === 'x1') {
-			for (const m of maps) if (rates.includes(1) && open(m.beatmapId, 1)) entries.push({ beatmapId: m.beatmapId, rate: 1 });
-		} else if (kind === 'screen') {
-			// a map's rates from x1 outwards: the nearest tests narrow it fastest
-			for (const m of maps) {
-				for (const rate of [...screened].sort((a, b) => Math.abs(a - 1) - Math.abs(b - 1))) {
-					if (open(m.beatmapId, rate)) entries.push({ beatmapId: m.beatmapId, rate });
-				}
-			}
-		} else {
-			const best = new Map<number, Measured>();
-			for (const row of measured) if (!best.has(row.map.beatmapId)) best.set(row.map.beatmapId, row);
-			for (const row of [...best.values()].slice(0, refineMaps)) {
-				const at = screened.indexOf(row.rate);
-				const below = at >= 0 ? screened[at - 1] ?? -Infinity : row.rate - 0.051;
-				const above = at >= 0 ? screened[at + 1] ?? Infinity : row.rate + 0.051;
-				for (const rate of rates) if (rate > below && rate < above && open(row.map.beatmapId, rate)) entries.push({ beatmapId: row.map.beatmapId, rate });
+		for (const rate of kind === 'x1' ? rings.filter(r => r === 1) : rings) {
+			for (const m of ordered) {
+				const st = stateAt(m, rate);
+				if (st === 'open' || st === 'retest') entries.push({ beatmapId: m.beatmapId, rate });
 			}
 		}
-		// easiest first (x1 stars × rate): the plays most likely to pass come first, and a 0 XP early on
-		// rules out the slower rates further down; a fail rules out everything harder after it
-		const hardness = (e: { beatmapId: number; rate: number }) => (byId.get(e.beatmapId)?.difficulty ?? 0) * e.rate;
-		entries.sort((a, b) => hardness(a) - hardness(b));
 		const kept = entries.slice(0, maxEntries);
 		if (!kept.length) { setSaved('Nothing left to test there.'); return; }
 		setSaved('Saving...');
@@ -310,11 +300,11 @@ export default function SevenView({ character, version, onClose }: { character?:
 				<section className="list seven-list">
 					<div className="list-head">
 						<input aria-label="Playlist name" value={pickedName} onChange={e => setPickedName(e.target.value)} />
-						<span className="hint" title={loop.seconds ? skillBreakdown(Object.fromEntries(Object.entries(loop.skills).map(([k, v]) => [k, v / loop.seconds]))) : undefined}>
+						<Tip className="hint" text={loop.seconds ? skillBreakdown(Object.fromEntries(Object.entries(loop.skills).map(([k, v]) => [k, v / loop.seconds]))) : undefined}>
 							{rotation.length
 								? <>{rotation.length} maps · {loop.plays} plays · loops every {Math.max(1, Math.round(loop.seconds / 60))} min · <b>{formatXp(loop.xp / loop.seconds)}</b> base XP/s · drift <span style={{ color: driftColor(loop.unknownDrift && !loop.drift ? undefined : loop.drift) }}>{signed(loop.drift)} min</span> a loop{loop.unknownDrift ? ' (some unknown)' : ''}</>
 								: 'Empty: add maps with + in All maps.'}
-						</span>
+						</Tip>
 						<span className="spacer" />
 						<button disabled={!rotation.length} onClick={() => setPicked({})}>Clear</button>
 						<button className="primary" disabled={!rotation.length} onClick={() => void savePicked()} title="Save these maps, each at its rate and repeats, as a game playlist">Save playlist</button>
@@ -338,7 +328,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 											<button aria-label="More times" disabled={times >= MAX_REPEAT} onClick={() => setPicked({ ...picked, [key]: times + 1 })}>+</button>
 										</span>
 									</span>
-									<span className="num strong" title={skillBreakdown(row.skills)}>{formatXp(row.perSecond)}</span>
+									<Tip className="num strong" text={skillBreakdown(row.skills)}>{formatXp(row.perSecond)}</Tip>
 									<span className="num" style={{ color: driftColor(row.drift) }}>{row.drift === undefined ? '–' : `${signed(row.drift)}m`}</span>
 									<button className="icon" aria-label="Remove from the playlist" title="Remove" onClick={() => toggle(key)}>✕</button>
 								</div>
@@ -377,7 +367,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 									<button className={`icon add${on ? ' on' : ''}`} aria-pressed={on} title={on ? 'In your playlist: press to take it out' : 'Add to your playlist'} onClick={() => toggle(key)}>{on ? '✓' : '+'}</button>
 									<MapName map={row.map} rate={row.rate} />
 									<span className="chips"><span className="chip">x{row.rate}</span></span>
-									<span className="num strong" title={skillBreakdown(row.skills)}>{formatXp(row.perSecond)}</span>
+									<Tip className="num strong" text={skillBreakdown(row.skills)}>{formatXp(row.perSecond)}</Tip>
 									<span className="num" title={row.level !== undefined ? `played at level ${row.level}` : undefined}>
 										{row.top ? <>{skillLabel(row.top)} <span className="muted">Lv {row.level ?? '?'}</span></> : ''}
 									</span>
@@ -395,8 +385,10 @@ export default function SevenView({ character, version, onClose }: { character?:
 				<section className="maps target">
 					<div className="target-form">
 						<p className="hint">
-							Every 7K play is recorded as it finishes, fails included. Base XP leaves out mindblock, fatigue, medals, mods and your upgrades (genes are kept in), so maps compare fairly. To save plays, some are skipped: a rate that gave 0 XP skips the map&apos;s slower rates, and a fail skips
-							its faster rates and every harder map (x1 stars × rate) until you gain the level-ups set below. Test playlists go easiest first.
+							Every 7K play is recorded as it finishes, fails included. Base XP leaves out mindblock, fatigue, medals, mods and your upgrades (genes are kept in), so maps compare fairly. Screening goes out from x1 one step at a time
+							(x1 for every map, easiest first, then a step slower, then a step faster, and so on, within the rates your Speed has unlocked). A slower rate stays
+							in only while going slower raised XP/s; a faster rate opens once the one before it passed, and a fail closes the faster rates (and every harder
+							map) until the level-ups below. A rate that gave 0 XP closes the slower ones for good. Press Screening again after playing to take in the results.
 						</p>
 						<div className="target-row">
 							<span className="hint" title="Each Speed upgrade or prestige unlocks one more rate step (0.05) each way">
@@ -415,9 +407,10 @@ export default function SevenView({ character, version, onClose }: { character?:
 									onChange={v => { setMedals(v); try { localStorage.setItem(MEDALS_KEY, String(v)); } catch { /* not kept */ } }} />
 							</label>
 						</div>
-						<p className="why">
-							Screening rates {screened.map(r => `x${r}`).join(', ')}: <b>{counts.untested.toLocaleString()}</b> map and rate pairs left to test,{' '}
-							{counts.tested.toLocaleString()} tested, {counts.ruledOut.toLocaleString()} skipped.
+						<p className="why" title="Slower rates stay open only while going slower raised XP/s; faster rates open one step at a time while you keep passing">
+							Screening order {rings.slice(0, 7).map(r => `x${r}`).join(', ')}{rings.length > 7 ? ', …' : ''}:{' '}
+							<b>{counts.open.toLocaleString()}</b> to play now, {counts.tested.toLocaleString()} tested,{' '}
+							{counts.waiting.toLocaleString()} waiting on the rate before, {counts.out.toLocaleString()} ruled out.
 						</p>
 						<div className="target-row">
 							<label className="strain-filter" title="A fail skips that map's faster rates and every harder map until your 7K level total has gone up by this many levels">
@@ -433,18 +426,21 @@ export default function SevenView({ character, version, onClose }: { character?:
 							</button>
 						</div>
 						<div className="target-row">
+							<label className="strain-filter" title="A pass played under this accuracy may give more XP/s with more levels: it goes back into screening after the same number of level-ups as fails">
+								Replay passes under
+								<NumberField aria-label="Accuracy bar, percent" min={0} max={100} value={failRule.minAccuracy}
+									onChange={v => setFailRule({ ...failRule, minAccuracy: v })} />
+								% accuracy after those level-ups
+							</label>
+						</div>
+						<div className="target-row">
 							<input aria-label="Test playlist name" value={testName} onChange={e => setTestName(e.target.value)} />
 							<label className="strain-filter" title="The most plays one playlist holds">
 								Up to
 								<NumberField aria-label="Most plays" min={1} max={2000} integer value={maxEntries} onChange={setMaxEntries} />
 							</label>
 							<button disabled={!maps.length} onClick={() => void saveTests('x1')} title="Every 7K map not yet tested at x1">Untested at x1</button>
-							<button disabled={!maps.length} onClick={() => void saveTests('screen')} title="Each map at its screening rates not yet tested or skipped, nearest x1 first">Screening</button>
-							<label className="strain-filter" title="How many of the best measured maps the refining playlist takes">
-								best
-								<NumberField aria-label="Maps to refine" min={1} max={500} integer value={refineMaps} onChange={setRefineMaps} />
-							</label>
-							<button disabled={!measured.length} onClick={() => void saveTests('refine')} title="The best measured maps at the untested rates between the screening rates either side of their best">Refining</button>
+							<button disabled={!maps.length} onClick={() => void saveTests('screen')} title="Every map and rate open now, ring by ring from x1 outwards, maps easiest first: press again after playing to take in the results">Screening</button>
 						</div>
 					</div>
 				</section>

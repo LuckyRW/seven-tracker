@@ -591,3 +591,12 @@ header {
 .row.seven-maps .add { width: 26px; height: 26px; padding: 0; font-weight: 700; }
 .row.seven-maps .add.on { color: #fff; background: #6d4aff; }
 .muted { color: var(--muted, #888); }
+
+/* the add-on's own hover box (XP / s by skill) */
+.tip {
+	position: fixed; z-index: 1000; transform: translateX(-100%);
+	white-space: pre; text-align: left; font: 11px/1.45 sans-serif; font-weight: 400; color: #ddd;
+	background: #1e1a28; border: 1px solid #4b4466; border-radius: 6px; padding: 6px 9px;
+	box-shadow: 0 6px 18px rgba(0, 0, 0, .55); pointer-events: none;
+}
+.last-play__total { display: block; }

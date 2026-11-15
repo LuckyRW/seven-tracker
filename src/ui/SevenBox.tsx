@@ -11,8 +11,8 @@ import { useEffect, useRef, useState } from 'react';
 import { beatmapStore, gameCharacter, type CharacterRow } from '@oss-idle/addon-sdk';
 import { modsKey, parseMods, type Mod } from '@oss-idle/shared/mods';
 import { allowedRate } from '@oss-idle/shared/rate';
-import { attemptsOf, baseOf, failCeiling, levelSumNow, readFailRule, progress7k, RULESET_7K, statusOf, testsOf, type RateStatus } from '../engine/seven.js';
-import { formatXp, skillBreakdown, skillLabel } from './parts.js';
+import { attemptsOf, baseOf, failCeiling, levelSumNow, readFailRule, progress7k, RULESET_7K, screenState, testsOf, totalOf, type ScreenState } from '../engine/seven.js';
+import { formatXp, skillBreakdown, skillLabel, Tip } from './parts.js';
 
 /** The ruleset the player picked, as the game's add-on host says it. */
 const ruleset = (): string => {
@@ -97,7 +97,7 @@ export default function SevenBox({ version }: { version: number }) {
 	const [character, setCharacter] = useState<CharacterRow>();
 	const [picked, setPicked] = useState<Picked>();
 	const [play, setPlay] = useState<Shown | null>();
-	const [status, setStatus] = useState<RateStatus>();
+	const [status, setStatus] = useState<ScreenState>();
 	const [speed, setSpeed] = useState(0);
 	const [lengths, setLengths] = useState<Map<number, number>>(new Map());
 	const pickedKey = picked && `${picked.beatmapId}@${picked.rate}@${picked.mods}`;
@@ -146,7 +146,13 @@ export default function SevenBox({ version }: { version: number }) {
 			const rule = readFailRule();
 			const tests = testsOf(all, levelSum, rule).get(`${picked.beatmapId}|${picked.mods}`);
 			const own = stars.get(picked.beatmapId);
-			setStatus(statusOf(tests, picked.rate, own ? own * picked.rate : undefined, failCeiling(all, levelSum, id => stars.get(id), rule)));
+			// the same screening rules as the Testing tab
+			const xpsAt = (r: number) => {
+				const at = Math.round(r * 100) / 100;
+				const pass = tests?.byRate.get(at)?.filter(a => !a.failed).at(-1);
+				return pass ? totalOf(baseOf(pass, all)) / (length / at) : undefined;
+			};
+			setStatus(screenState(tests, picked.rate, { levelSum, rule, stars: own ?? 0, ceiling: failCeiling(all, levelSum, id => stars.get(id), rule), xpsAt }));
 			const last = tests?.byRate.get(picked.rate)?.filter(a => !a.failed).at(-1);
 			setPlay(last ? { playedAt: last.startedAt, base: baseOf(last, all), seconds: length / last.rate, levels: last.levels } : null);
 		});
@@ -167,17 +173,21 @@ export default function SevenBox({ version }: { version: number }) {
 		>
 			<div className="last-play__head">7K · Last play at {label}</div>
 			{status && status !== 'tested' && (
-				<div className="last-play__none" style={{ color: status === 'untested' ? '#fbbf24' : '#888' }}>
-					{status === 'untested' ? 'Untested: worth a try' : status === 'failed' ? 'Failed here: not passed yet' : `Ruled out: ${status}`}
+				<div className="last-play__none" style={{ color: status === 'open' || status === 'retest' ? '#fbbf24' : '#888' }}>
+					{status === 'open' ? 'Untested: next to screen'
+						: status === 'retest' ? 'Played under your accuracy bar, levels since: worth replaying'
+						: status === 'waiting' ? 'Untested: play the rate next to it towards x1 first'
+						: status === 'failed' ? 'Failed here: not passed yet'
+						: `Ruled out: ${status}`}
 				</div>
 			)}
 			{play === null ? (
 				<div className="last-play__none">Never passed at this rate and mods</div>
 			) : (
 				<>
-					<div className="last-play__total" title={skillBreakdown(Object.fromEntries(skills.map(([s, xp]) => [s, xp / play.seconds])))}>
+					<Tip className="last-play__total" text={skillBreakdown(Object.fromEntries(skills.map(([s, xp]) => [s, xp / play.seconds])))}>
 						{formatXp(total / play.seconds)} <span>base XP/s</span>
-					</div>
+					</Tip>
 					{skills.slice(0, 4).map(([skill, xp]) => (
 						<div className="last-play__row" key={skill}>
 							<span>{skillLabel(skill)}</span>

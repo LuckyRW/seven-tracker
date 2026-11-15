@@ -95,6 +95,28 @@ check('the screening grid: every third, x1 and the fastest',
 	check('speed unlocks count upgrades and prestige', p?.speedUpgrades === 2);
 }
 
+// screening: x1 first, then a step slower, a step faster...; slower only while XP/s rose; faster while passing
+{
+	check('ring order', m.ringOrder([0.9, 0.95, 1, 1.05, 1.1]).join() === '1,0.95,1.05,0.9,1.1');
+	const rule = { liftAfter: 5, resetAt: 0, minAccuracy: 95 };
+	const play = (rate, o = {}) => ({ token: String(Math.random()), characterId: 1, beatmapId: 7, rate, mods: '', startedAt: 1, fatigue: 0,
+		failed: false, accuracy: 0.97, gains: { speed: 10 }, levels: {}, levelSum: 50, own: {}, genetics: {}, ...o });
+	const ctx = (xps = {}) => ({ levelSum: 50, rule, stars: 2, ceiling: Infinity, xpsAt: r => xps[Math.round(r * 100) / 100] });
+	const st = (plays, rate, xps, c) => m.screenState(m.testsOf(plays, 50, rule).get('7|'), rate, c ?? ctx(xps));
+	check('x1 is open first', st([], 1) === 'open');
+	check('x0.95 waits for x1', st([], 0.95) === 'waiting');
+	check('x1.05 waits for x1', st([], 1.05) === 'waiting');
+	check('after an x1 pass, x0.95 and x1.05 open', st([play(1)], 0.95) === 'open' && st([play(1)], 1.05) === 'open');
+	check('slower gave more XP/s: x0.9 opens', st([play(1), play(0.95)], 0.9, { 1: 10, 0.95: 12 }) === 'open');
+	check('slower gave less: x0.9 is out', st([play(1), play(0.95)], 0.9, { 1: 10, 0.95: 8 }) === 'slower is worse');
+	check('x1 failed: x0.95 opens (slower may pass)', st([play(1, { failed: true })], 0.95) === 'open');
+	check('x1 failed: x1.05 is too hard', st([play(1, { failed: true })], 1.05) === 'too hard');
+	check('a fail at x1.05 closes x1.1', st([play(1), play(1.05, { failed: true })], 1.1) === 'too hard');
+	check('a pass under 95% stays tested before the level-ups', st([play(1, { accuracy: 0.9 })], 1) === 'tested');
+	check('and is replayed after them', m.screenState(m.testsOf([play(1, { accuracy: 0.9 })], 55, rule).get('7|'), 1, { ...ctx(), levelSum: 55 }) === 'retest');
+	check('a pass over 95% is never replayed', m.screenState(m.testsOf([play(1)], 99, rule).get('7|'), 1, { ...ctx(), levelSum: 99 }) === 'tested');
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;

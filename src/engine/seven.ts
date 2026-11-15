@@ -179,6 +179,8 @@ export type Attempt = {
 	/** strain minutes at its start, as the game's API had them */
 	minutes?: number;
 	failed: boolean;
+	/** the play's accuracy, 0 to 1 (from its score); unknown for plays recorded before it was kept */
+	accuracy?: number;
 	/** XP given, per skill */
 	gains: Record<string, number>;
 	/** each skill's level before the play */
@@ -226,6 +228,13 @@ const noteBar = (mark: BarMark) => {
 	if (all.some(m => m.token === mark.token)) return;
 	all.push(mark);
 	try { localStorage.setItem(BARS_KEY, JSON.stringify(all.slice(-MAX_BARS))); } catch { /* not kept */ }
+};
+
+/** A score's accuracy as 0 to 1, whether the server gives a fraction or a percent. */
+const accuracyOf = (v: unknown): number | undefined => {
+	const n = Number(v);
+	if (v === undefined || v === null || !Number.isFinite(n)) return undefined;
+	return n > 1.5 ? n / 100 : n;
 };
 
 /** Skills only 7K has: a result gaining any of them is a 7K play's. */
@@ -341,6 +350,7 @@ export const recordPlays = (
 				token: msg.token,
 				...play,
 				failed: msg.result.failed === true,
+				accuracy: accuracyOf((msg.result.score as { accuracy?: unknown } | undefined)?.accuracy),
 				gains: Object.fromEntries(gains.filter(g => g.gained > 0).map(g => [g.skill, g.gained])),
 				levels,
 				levelSum: Object.values(levels).reduce((a, b) => a + Number(b), 0),
@@ -449,8 +459,13 @@ export const levelSumNow = (attempts: readonly Attempt[], progress?: { levelSum:
  * When a fail stops skipping maps: once the level total has gained `liftAfter` levels since it
  * (5 by default), or once it is older than `resetAt` (the player's own "retest fails now").
  */
-export type FailRule = { liftAfter: number; resetAt: number };
-export const DEFAULT_FAIL_RULE: FailRule = { liftAfter: 5, resetAt: 0 };
+export type FailRule = {
+	liftAfter: number;
+	resetAt: number;
+	/** a pass under this accuracy, in percent, is screened again after `liftAfter` level-ups: more levels may play it better */
+	minAccuracy: number;
+};
+export const DEFAULT_FAIL_RULE: FailRule = { liftAfter: 5, resetAt: 0, minAccuracy: 95 };
 const FAIL_RULE_KEY = 'seven-tracker:fail-rule';
 export const readFailRule = (): FailRule => {
 	try { return { ...DEFAULT_FAIL_RULE, ...JSON.parse(localStorage.getItem(FAIL_RULE_KEY) ?? '{}') as Partial<FailRule> }; } catch { return DEFAULT_FAIL_RULE; }
@@ -503,6 +518,84 @@ export const statusOf = (t: MapTests | undefined, rate: number, hardness?: numbe
 	if (hardness !== undefined && hardness > ceiling + 1e-9) return 'too hard';
 	if (here?.length) return 'failed';
 	return 'untested';
+};
+
+const round2 = (rate: number) => Math.round(rate * 100) / 100;
+
+/**
+ * The order rates are screened in: x1, then a step slower, a step faster, two slower, two faster
+ * and so on, within `rates` (the ones unlocked).
+ */
+export const ringOrder = (rates: readonly number[]): number[] => {
+	const have = new Set(rates.map(round2));
+	const out: number[] = have.has(1) ? [1] : [];
+	for (let k = 1; k <= 20; k++) {
+		for (const r of [round2(1 - 0.05 * k), round2(1 + 0.05 * k)]) if (have.has(r)) out.push(r);
+	}
+	return out;
+};
+
+export type ScreenState =
+	/** passed: measured */
+	| 'tested'
+	/** to play now */
+	| 'open'
+	/** passed under the accuracy bar, and enough level-ups since: to play again */
+	| 'retest'
+	/** opens once the rate next to it towards x1 is played */
+	| 'waiting'
+	/** the rate a step faster gave less XP/s than the one faster still: slower only gets worse */
+	| 'slower is worse'
+	/** a rate at or above it gave 0 XP */
+	| '0 XP'
+	/** failed here, and not enough level-ups since */
+	| 'failed'
+	/** a fail at a slower rate, or on an easier map, holds */
+	| 'too hard';
+
+export type ScreenContext = {
+	/** the level total now ({@link levelSumNow}) */
+	levelSum: number;
+	rule: FailRule;
+	/** the map's base XP / s at a rate, from its last pass there */
+	xpsAt: (rate: number) => number | undefined;
+	/** the map's x1 stars */
+	stars: number;
+	/** {@link failCeiling} */
+	ceiling: number;
+};
+
+/**
+ * Where a map stands at a rate in screening. From x1 outwards, a step at a time:
+ * - slower: a rate opens once the one a step faster is played; if that one failed, slower may
+ *   pass; if it passed, slower stays open only while going slower raised XP/s (from x1 down);
+ * - faster: a rate opens once the one a step slower passed; a fail closes everything faster (and
+ *   every harder map) until the level-ups the rule asks for;
+ * - a pass under the accuracy bar opens again after the same level-ups.
+ */
+export const screenState = (t: MapTests | undefined, rate: number, c: ScreenContext): ScreenState => {
+	const r = round2(rate);
+	const at = (x: number) => t?.byRate.get(round2(x)) ?? [];
+	const passed = (x: number) => at(x).some(a => !a.failed);
+	const last = at(r).filter(a => !a.failed).at(-1);
+	if (last) {
+		const low = last.accuracy !== undefined && last.accuracy * 100 < c.rule.minAccuracy;
+		return low && c.levelSum - last.levelSum >= Math.max(1, c.rule.liftAfter) ? 'retest' : 'tested';
+	}
+	if (t?.easyAt !== undefined && r < t.easyAt) return '0 XP';
+	if (at(r).some(a => failHolds(a, c.levelSum, c.rule))) return 'failed';
+	if (r >= 1) {
+		if (t?.hardAt !== undefined && r > t.hardAt) return 'too hard';
+		if (c.stars * r > c.ceiling + 1e-9) return 'too hard';
+		return r === 1 || passed(r - 0.05) ? 'open' : 'waiting';
+	}
+	const faster = round2(r + 0.05);
+	if (!at(faster).length) return 'waiting';
+	if (!passed(faster)) return 'open';
+	if (faster >= 1) return 'open';
+	const here = c.xpsAt(faster) ?? 0;
+	const above = c.xpsAt(faster + 0.05);
+	return above === undefined || here > above ? 'open' : 'slower is worse';
 };
 
 /** Every third rate, x1 and the fastest: addon-sim's screening grid (`screenRates`). */

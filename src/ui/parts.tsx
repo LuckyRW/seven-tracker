@@ -1,4 +1,4 @@
-import { useState, type InputHTMLAttributes } from 'react';
+import { useState, type InputHTMLAttributes, type ReactNode } from 'react';
 
 /** A skill as the game names it: `reading` shows as technical. */
 export const skillLabel = (skill: string) => skill === 'reading' ? 'technical' : skill;
@@ -77,5 +77,27 @@ export function NumberField({ value, onChange, min, max, integer, ...rest }: {
 				if (e.key === 'Enter') e.currentTarget.blur();
 			}}
 		/>
+	);
+}
+
+/**
+ * Text shown in a box beside what it is on while the pointer is over it: XP / s by skill. Drawn by
+ * the add-on rather than left to the browser's title tooltip, which the game does not always show.
+ */
+export function Tip({ text, children, className }: { text?: string; children: ReactNode; className?: string }) {
+	const [at, setAt] = useState<{ x: number; y: number }>();
+	return (
+		<span
+			className={className}
+			onMouseEnter={e => { const r = e.currentTarget.getBoundingClientRect(); setAt({ x: r.right, y: r.bottom }); }}
+			onMouseLeave={() => setAt(undefined)}
+		>
+			{children}
+			{text && at && (
+				<span className="tip" role="tooltip" style={{ left: Math.max(8, Math.min(at.x, window.innerWidth - 8)), top: Math.min(at.y + 6, window.innerHeight - 160) }}>
+					{text}
+				</span>
+			)}
+		</span>
 	);
 }
