@@ -408,7 +408,7 @@ export const recordPlays = (
 		if (!beatmapId || id === undefined) { console.warn(`[7K tracker] 7K result ${token.slice(0, 6)} not recorded: ${beatmapId ? 'no character yet' : 'its map is unknown'}`); return undefined; }
 		console.info(`[7K tracker] recording a 7K play whose start was not seen: ${beatmapId}`);
 		return {
-			characterId: id, beatmapId, rate: Number(score?.rate ?? state?.rate) || 1,
+			characterId: id, beatmapId, rate: round2(Number(score?.rate ?? state?.rate) || 1),
 			mods: score?.mods ? modsKey(score.mods) : state?.mods ?? '', startedAt: state?.at ?? Date.now(), fatigue: 0,
 			// the latest progress read: its play levels, multipliers and genes
 			progress: latestProgress,
@@ -447,7 +447,7 @@ export const recordPlays = (
 				if (minutes !== undefined) play.minutes = minutes;
 				if (minutes !== undefined || r.warmupBar !== undefined) noteBar({ token: r.token, at, bar: r.warmupBar, minutes, characterId: id });
 			});
-			const play: Started = { characterId: id, beatmapId: r.beatmapId, rate: r.rate, mods: modsKey(r.mods ?? []), startedAt: Date.now(), fatigue: r.fatigue ?? 0, bar: r.warmupBar };
+			const play: Started = { characterId: id, beatmapId: r.beatmapId, rate: round2(Number(r.rate) || 1), mods: modsKey(r.mods ?? []), startedAt: Date.now(), fatigue: r.fatigue ?? 0, bar: r.warmupBar };
 			started.set(r.token, play);
 			recorderStatus.waiting = started.size;
 			void progress7k(id).then(p => {
@@ -651,12 +651,14 @@ export const testsOf = (attempts: readonly Attempt[], levelSum: number, rule: Fa
 		const key = `${a.beatmapId}|${a.mods}`;
 		let t = out.get(key);
 		if (!t) out.set(key, t = { byRate: new Map() });
-		const list = t.byRate.get(a.rate) ?? [];
+		// rates as the game names them (x0.95): a rate sent as 0.9499999 is the same one
+		const rate = round2(a.rate);
+		const list = t.byRate.get(rate) ?? [];
 		list.push(a);
-		t.byRate.set(a.rate, list);
-		if (!a.failed && totalOf(a.gains) <= 0) t.easyAt = Math.max(t.easyAt ?? -Infinity, a.rate);
+		t.byRate.set(rate, list);
+		if (!a.failed && totalOf(a.gains) <= 0) t.easyAt = Math.max(t.easyAt ?? -Infinity, rate);
 		// a fail rules out the faster rates until enough levels are gained, or the player lifts it
-		if (failHolds(a, levelSum, rule)) t.hardAt = Math.min(t.hardAt ?? Infinity, a.rate);
+		if (failHolds(a, levelSum, rule)) t.hardAt = Math.min(t.hardAt ?? Infinity, rate);
 	}
 	return out;
 };
