@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from 'react';
 import { beatmapStore, gameCharacter, type CharacterRow } from '@oss-idle/addon-sdk';
 import { modsKey, parseMods, type Mod } from '@oss-idle/shared/mods';
 import { allowedRate } from '@oss-idle/shared/rate';
-import { attemptsOf, baseOf, readChecked, toggleChecked, failCeiling, reachOf, levelSumNow, readFailRule, progress7k, RULESET_7K, screenState, testsOf, totalOf, type ScreenState } from '../engine/seven.js';
+import { attemptsOf, baseOf, readChecked, toggleChecked, topCutOf, failCeiling, reachOf, levelSumNow, readFailRule, progress7k, RULESET_7K, screenState, testsOf, totalOf, type ScreenState } from '../engine/seven.js';
 import { formatXp, skillBreakdown, skillLabel, Tip } from './parts.js';
 
 /** The ruleset the player picked, as the game's add-on host says it. */
@@ -154,7 +154,9 @@ export default function SevenBox({ version }: { version: number }) {
 				const pass = tests?.byRate.get(at)?.filter(a => !a.failed).at(-1);
 				return pass ? totalOf(baseOf(pass, all)) / (length / at) : undefined;
 			};
-			setStatus(screenState(tests, picked.rate, { beatmapId: picked.beatmapId, checked: readChecked(), levelSum, rule, stars: own ?? 0, ceiling: failCeiling(all, levelSum, id => stars.get(id), rule), xpsAt, reach: reachOf(all, id => stars.get(id), rule.reachMargin ?? 2) }));
+			const topCut = rule.topM > 0 ? topCutOf(all, id => lengths.get(id), rule.topM) : undefined;
+			const maxRate = allowedRate(1.5, progress?.speedUpgrades ?? 0);
+			setStatus(screenState(tests, picked.rate, { beatmapId: picked.beatmapId, checked: readChecked(), topCut, maxRate, levelSum, rule, stars: own ?? 0, ceiling: failCeiling(all, levelSum, id => stars.get(id), rule), xpsAt, reach: reachOf(all, id => stars.get(id), rule.reachMargin ?? 2) }));
 			const last = tests?.byRate.get(picked.rate)?.filter(a => !a.failed).at(-1);
 			setPlay(last ? { playedAt: last.startedAt, base: baseOf(last, all), seconds: length / last.rate, levels: last.levels, since: levelSum - last.levelSum, playLevels: last.levelKind === 'play' } : null);
 		});
@@ -191,6 +193,8 @@ export default function SevenBox({ version }: { version: number }) {
 						: status === 'waiting' ? 'Untested: play the rate next to it towards x1 first'
 						: status === 'failed' ? 'Failed here: not passed yet'
 						: status === 'checked off' ? 'Checked off: screening skips it'
+						: status === 'skipped ahead' ? 'Skipped: a clean pass a few rates slower was outside your top maps'
+						: status === 'too little XP' ? 'Skipped: a clean pass faster was outside your top maps, slower gives no more'
 						: `Ruled out: ${status}`}
 				</div>
 			)}

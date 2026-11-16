@@ -156,6 +156,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 	const checked = readChecked();
 	const stateAt = (m: Map7k, rate: number): ScreenState => screenState(tests.get(`${m.beatmapId}|`), rate, {
 		levelSum: levelNow, rule: failRule, stars: m.difficulty, ceiling, reach, beatmapId: m.beatmapId, checked,
+		topCut: failRule.topM > 0 ? bestRows[failRule.topM - 1]?.perSecond : undefined, maxRate: rates[rates.length - 1],
 		xpsAt: r => byKey.get(`${m.beatmapId}@${Math.round(r * 100) / 100}`)?.perSecond,
 	});
 
@@ -278,7 +279,6 @@ export default function SevenView({ character, version, onClose }: { character?:
 		return measured.filter(r => !seen.has(r.map.beatmapId) && (seen.add(r.map.beatmapId), true));
 	}, [measured]);
 	const bestTen = bestRows.slice(0, 10);
-	const tenth = bestTen.length >= 10 ? bestTen[9].perSecond : undefined;
 
 	// ---- testing ----
 	const [testName, setTestName] = useState('7K tests');
@@ -301,10 +301,10 @@ export default function SevenView({ character, version, onClose }: { character?:
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [maps, rings, tests, ceiling, byKey, failRule, levelNow, reach]);
 	const saveTests = async (kind: 'x1' | 'screen' | 'mixed') => {
-		// maps easiest first by their x1 stars, ring by ring: every map at x1, then every map a step
+		// maps hardest first by their x1 stars, ring by ring: every map at x1, then every map a step
 		// slower, then a step faster... A ring's maps are in only once the ring before was played for
 		// them: rebuild the playlist as results come in.
-		const ordered = [...maps].sort((a, b) => a.difficulty - b.difficulty);
+		const ordered = [...maps].sort((a, b) => b.difficulty - a.difficulty);
 		const entries: { beatmapId: number; rate: number }[] = [];
 		for (const rate of kind === 'x1' ? rings.filter(r => r === 1) : rings) {
 			for (const m of ordered) {
@@ -497,7 +497,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 					<div className="target-form">
 						<p className="hint">
 							Every 7K play is recorded as it finishes, fails included. Base XP leaves out mindblock, fatigue, medals, mods and your upgrades (genes are kept in), so maps compare fairly. Screening goes out from x1 one step at a time
-							(x1 for every map, easiest first, then a step slower, then a step faster, and so on, within the rates your Speed has unlocked). A slower rate stays
+							(x1 for every map, hardest first, then a step slower, then a step faster, and so on, within the rates your Speed has unlocked). A slower rate stays
 							in only while going slower raised XP/s; a faster rate opens once the one before it passed, and a fail closes the faster rates (and every harder
 							map) until the level-ups below. A rate that gave 0 XP closes the slower ones for good. Press Screening again after playing to take in the results.
 						</p>
@@ -551,16 +551,15 @@ export default function SevenView({ character, version, onClose }: { character?:
 									onChange={v => setFailRule({ ...failRule, reachMargin: v })} />
 								★ above your hardest pass{Number.isFinite(reach) ? ` (up to ${reach.toFixed(2)}★)` : ''}
 							</label>
-							<label className="strain-filter" title="A map passed at or over the accuracy bar that gave under this base XP/s will not give more slower: its slower rates are not screened. 0 turns it off.">
-								Skip slower rates of clean passes under
-								<NumberField aria-label="Base XP/s a clean pass needs" min={0} max={1000} value={failRule.minXps ?? 0}
-									onChange={v => setFailRule({ ...failRule, minXps: v })} />
-								base XP/s
+							<label className="strain-filter" title="A rate passed at or over the accuracy bar whose base XP/s is not in your top maps: slower rates of that map are not screened, and the next faster ones are skipped (the fastest rate you have is always tried). 0 turns it off.">
+								Passes over the bar outside your top
+								<NumberField aria-label="Top maps by base XP/s" min={0} max={200} integer value={failRule.topM ?? 10}
+									onChange={v => setFailRule({ ...failRule, topM: v })} />
+								: skip slower rates, and skip
+								<NumberField aria-label="Faster rates skipped" min={0} max={20} integer value={failRule.skipSteps ?? 3}
+									onChange={v => setFailRule({ ...failRule, skipSteps: v })} />
+								faster{failRule.topM > 0 && bestRows[failRule.topM - 1] ? ` (top ${failRule.topM} from ${formatXp(bestRows[failRule.topM - 1].perSecond)} base XP/s)` : failRule.topM > 0 ? ` (off until ${failRule.topM} maps are passed)` : ''}
 							</label>
-							<button disabled={tenth === undefined} onClick={() => tenth !== undefined && setFailRule({ ...failRule, minXps: Math.floor(tenth * 10) / 10 })}
-								title="Set it to your 10th best map's base XP/s: anything under it would not make a top 10 playlist">
-								Use 10th best{tenth !== undefined ? ` (${formatXp(tenth)})` : ''}
-							</button>
 						</div>
 						<div className="target-row">
 							<input aria-label="Test playlist name" value={testName} onChange={e => setTestName(e.target.value)} />
@@ -569,7 +568,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 								<NumberField aria-label="Most plays" min={1} max={2000} integer value={maxEntries} onChange={setMaxEntries} />
 							</label>
 							<button disabled={!maps.length} onClick={() => void saveTests('x1')} title="Every 7K map not yet tested at x1">Untested at x1</button>
-							<button disabled={!maps.length} onClick={() => void saveTests('screen')} title="Every map and rate open now, ring by ring from x1 outwards, maps easiest first: press again after playing to take in the results">Screening</button>
+							<button disabled={!maps.length} onClick={() => void saveTests('screen')} title="Every map and rate open now, ring by ring from x1 outwards, maps hardest first: press again after playing to take in the results">Screening</button>
 						</div>
 						<div className="target-row">
 							<label className="strain-filter" title="Screening with a farm map mixed in: after this many tests, one of your best maps by base XP/s">

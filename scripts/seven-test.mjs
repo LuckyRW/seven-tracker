@@ -120,11 +120,18 @@ check('the screening grid: every third, x1 and the fastest',
 	check('x1 failed: x1.05 is too hard', st([play(1, { failed: true })], 1.05) === 'too hard');
 	check('a fail at x1.05 closes x1.1', st([play(1), play(1.05, { failed: true })], 1.1) === 'too hard');
 	{
-		const low = { ...rule, minXps: 20 };
-		const c = xps => ({ ...ctx(xps), rule: low });
-		check('a clean x1 pass under the XP/s bar closes x0.95', m.screenState(m.testsOf([play(1)], 50, low).get('7|'), 0.95, c({ 1: 10 })) === 'too little XP');
-		check('a sloppy one does not', m.screenState(m.testsOf([play(1, { accuracy: 0.9 })], 50, low).get('7|'), 0.95, c({ 1: 10 })) === 'open');
-		check('nor a clean one over the bar', m.screenState(m.testsOf([play(1)], 50, low).get('7|'), 0.95, c({ 1: 25 })) === 'open');
+		const low = { ...rule, topM: 10, skipSteps: 3 };
+		const c = (xps, extra = {}) => ({ ...ctx(xps), rule: low, topCut: 20, maxRate: 1.5, ...extra });
+		const at = (plays, rate, xps, extra) => m.screenState(m.testsOf(plays, 50, low).get('7|'), rate, c(xps, extra));
+		check('a clean x1 pass outside the top closes x0.95', at([play(1)], 0.95, { 1: 10 }) === 'too little XP');
+		check('a sloppy one does not', at([play(1, { accuracy: 0.9 })], 0.95, { 1: 10 }) === 'open');
+		check('nor a clean one in the top', at([play(1)], 0.95, { 1: 25 }) === 'open');
+		check('a weak clean x1 skips x1.05 to x1.15', ['1.05', '1.1', '1.15'].every(r => at([play(1)], Number(r), { 1: 10 }) === 'skipped ahead'));
+		check('and tries x1.2', at([play(1)], 1.2, { 1: 10 }) === 'open');
+		check('x1.25 waits for x1.2', at([play(1)], 1.25, { 1: 10 }) === 'waiting');
+		check('near the top, the fastest rate is tried', at([play(1), play(1.4)], 1.5, { 1: 25, 1.4: 10 }) === 'open' && at([play(1), play(1.4)], 1.45, { 1: 25, 1.4: 10 }) === 'skipped ahead');
+		check('a strong pass steps on as before', at([play(1)], 1.05, { 1: 25 }) === 'open');
+		check('the fastest unlocked caps the jump', at([play(1)], 1.1, { 1: 10 }, { maxRate: 1.1 }) === 'open');
 	}
 	check('a pass under 95% stays tested before the level-ups', st([play(1, { accuracy: 0.9 })], 1) === 'tested');
 	check('and is replayed after them', m.screenState(m.testsOf([play(1, { accuracy: 0.9 })], 55, rule).get('7|'), 1, { ...ctx(), levelSum: 55 }) === 'retest');

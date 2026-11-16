@@ -659,8 +659,14 @@ export type FailRule = {
 	reachMargin: number;
 	/** base XP/s a clean pass (at or over `minAccuracy`) must give for slower rates of that map to be screened; 0 is off */
 	minXps: number;
+	/**
+	 * A pass at or over `minAccuracy` whose base XP/s is outside the top `topM` maps: slower rates of the
+	 * map are skipped, and so are the next `skipSteps` faster ones (the fastest rate is always tried). 0 is off.
+	 */
+	topM: number;
+	skipSteps: number;
 };
-export const DEFAULT_FAIL_RULE: FailRule = { liftAfter: 5, resetAt: 0, minAccuracy: 95, reachMargin: 2, minXps: 0 };
+export const DEFAULT_FAIL_RULE: FailRule = { liftAfter: 5, resetAt: 0, minAccuracy: 95, reachMargin: 2, minXps: 0, topM: 10, skipSteps: 3 };
 const FAIL_RULE_KEY = 'seven-tracker:fail-rule';
 export const readFailRule = (): FailRule => {
 	try { return { ...DEFAULT_FAIL_RULE, ...JSON.parse(localStorage.getItem(FAIL_RULE_KEY) ?? '{}') as Partial<FailRule> }; } catch { return DEFAULT_FAIL_RULE; }
@@ -754,7 +760,30 @@ export type ScreenState =
 	/** far harder (x1 stars × rate) than the hardest play passed yet */
 	| 'out of reach'
 	/** checked off by hand: screening skips it */
-	| 'checked off';
+	| 'checked off'
+	/** a few steps above a clean pass outside the top M: skipped on the way to the next one tried */
+	| 'skipped ahead';
+
+/** The base XP/s of the `m`-th best map (each at its best rate, no mods): what a clean pass is weighed against. */
+export const topCutOf = (attempts: readonly Attempt[], lengthOf: (beatmapId: number) => number | undefined, m: number): number | undefined => {
+	if (!(m > 0)) return undefined;
+	const ordered = [...attempts].sort((a, b) => a.startedAt - b.startedAt);
+	const best = new Map<number, number>();
+	for (const [key, t] of testsOf(ordered, 0)) {
+		const [id, mods] = key.split('|');
+		if (mods) continue;
+		const length = lengthOf(Number(id));
+		if (!length) continue;
+		for (const [rate, list] of t.byRate) {
+			const pass = list.filter(a => !a.failed).at(-1);
+			if (!pass) continue;
+			const xps = totalOf(baseOf(pass, ordered)) / (length / rate);
+			best.set(Number(id), Math.max(best.get(Number(id)) ?? 0, xps));
+		}
+	}
+	const sorted = [...best.values()].sort((a, b) => b - a);
+	return sorted.length >= m ? sorted[m - 1] : undefined;
+};
 
 // ---- maps checked off by hand ----
 
@@ -802,6 +831,10 @@ export type ScreenContext = {
 	ceiling: number;
 	/** the hardest a play may be (x1 stars × rate) to be screened: {@link reachOf} */
 	reach?: number;
+	/** the base XP/s of the top M-th map ({@link topCutOf}): a clean pass under it skips rates. Unset: off */
+	topCut?: number;
+	/** the fastest rate the character has unlocked: always tried, however many rates are skipped */
+	maxRate?: number;
 	/** the map, and the maps and rates checked off by hand ({@link readChecked}) */
 	beatmapId?: number;
 	checked?: Set<string>;
@@ -826,19 +859,28 @@ export const screenState = (t: MapTests | undefined, rate: number, c: ScreenCont
 		return low && c.levelSum - last.levelSum >= Math.max(1, c.rule.liftAfter) ? 'retest' : 'tested';
 	}
 	if (t?.easyAt !== undefined && r < t.easyAt) return '0 XP';
-	// a faster rate played cleanly that still gave too little: slower plays it no better
-	if (c.rule.minXps > 0 && t) for (const [x, list] of t.byRate) {
-		if (x <= r) continue;
-		const clean = list.filter(a => !a.failed).at(-1);
+	// a rate passed at or over the accuracy bar that still gave less than the top M maps: playing it
+	// slower gives no more, and a few steps faster are not worth screening one by one
+	const weak = (x: number) => {
+		if (c.topCut === undefined) return false;
+		const clean = at(x).filter(a => !a.failed).at(-1);
 		const xps = clean && c.xpsAt(x);
-		if (clean?.accuracy !== undefined && clean.accuracy * 100 >= c.rule.minAccuracy && xps !== undefined && xps < c.rule.minXps) return 'too little XP';
-	}
+		return clean?.accuracy !== undefined && clean.accuracy * 100 >= c.rule.minAccuracy && xps !== undefined && xps < c.topCut;
+	};
+	if (t) for (const x of t.byRate.keys()) if (x > r && weak(x)) return 'too little XP';
 	const reach = c.reach ?? Infinity;
 	if (c.stars * r > reach + 1e-9) return 'out of reach';
 	if (at(r).some(a => failHolds(a, c.levelSum, c.rule))) return 'failed';
 	if (r >= 1) {
 		if (t?.hardAt !== undefined && r > t.hardAt) return 'too hard';
 		if (c.stars * r > c.ceiling + 1e-9) return 'too hard';
+		// the fastest rate passed below this one, if a weak pass: the next `skipSteps` rates are skipped
+		const below = t ? [...t.byRate.keys()].filter(x => x < r - 1e-9 && x >= 1 && passed(x)).sort((a, b) => b - a)[0] : undefined;
+		if (below !== undefined && weak(below)) {
+			const jump = Math.min(round2(below + (Math.max(0, c.rule.skipSteps ?? 0) + 1) * 0.05), c.maxRate ?? 1.5);
+			if (r < jump - 1e-9) return 'skipped ahead';
+			if (Math.abs(r - jump) < 1e-9) return 'open';
+		}
 		return r === 1 || passed(r - 0.05) ? 'open' : 'waiting';
 	}
 	const faster = round2(r + 0.05);
