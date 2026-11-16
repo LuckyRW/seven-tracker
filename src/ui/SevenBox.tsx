@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from 'react';
 import { beatmapStore, gameCharacter, type CharacterRow } from '@oss-idle/addon-sdk';
 import { modsKey, parseMods, type Mod } from '@oss-idle/shared/mods';
 import { allowedRate } from '@oss-idle/shared/rate';
-import { attemptsOf, baseOf, failCeiling, reachOf, levelSumNow, readFailRule, progress7k, RULESET_7K, screenState, testsOf, totalOf, type ScreenState } from '../engine/seven.js';
+import { attemptsOf, baseOf, readChecked, toggleChecked, failCeiling, reachOf, levelSumNow, readFailRule, progress7k, RULESET_7K, screenState, testsOf, totalOf, type ScreenState } from '../engine/seven.js';
 import { formatXp, skillBreakdown, skillLabel, Tip } from './parts.js';
 
 /** The ruleset the player picked, as the game's add-on host says it. */
@@ -98,6 +98,8 @@ export default function SevenBox({ version }: { version: number }) {
 	const [picked, setPicked] = useState<Picked>();
 	const [play, setPlay] = useState<Shown | null>();
 	const [status, setStatus] = useState<ScreenState>();
+	/** bumped when a map is checked off or back on here */
+	const [checks, setChecks] = useState(0);
 	const [speed, setSpeed] = useState(0);
 	const [lengths, setLengths] = useState<Map<number, number>>(new Map());
 	const pickedKey = picked && `${picked.beatmapId}@${picked.rate}@${picked.mods}`;
@@ -152,17 +154,23 @@ export default function SevenBox({ version }: { version: number }) {
 				const pass = tests?.byRate.get(at)?.filter(a => !a.failed).at(-1);
 				return pass ? totalOf(baseOf(pass, all)) / (length / at) : undefined;
 			};
-			setStatus(screenState(tests, picked.rate, { levelSum, rule, stars: own ?? 0, ceiling: failCeiling(all, levelSum, id => stars.get(id), rule), xpsAt, reach: reachOf(all, id => stars.get(id), rule.reachMargin ?? 2) }));
+			setStatus(screenState(tests, picked.rate, { beatmapId: picked.beatmapId, checked: readChecked(), levelSum, rule, stars: own ?? 0, ceiling: failCeiling(all, levelSum, id => stars.get(id), rule), xpsAt, reach: reachOf(all, id => stars.get(id), rule.reachMargin ?? 2) }));
 			const last = tests?.byRate.get(picked.rate)?.filter(a => !a.failed).at(-1);
 			setPlay(last ? { playedAt: last.startedAt, base: baseOf(last, all), seconds: length / last.rate, levels: last.levels, since: levelSum - last.levelSum, playLevels: last.levelKind === 'play' } : null);
 		});
 		return () => { gone = true; };
-	}, [pickedKey, character?.id, lengths, stars, version]);
+	}, [pickedKey, character?.id, lengths, stars, version, checks]);
 
 	if (!picked || play === undefined) return null;
 	const label = `x${picked.rate}${picked.mods ? ` +${picked.mods.replace(/,/g, '')}` : ''}`;
 	const skills = play ? Object.entries(play.base).filter(([, xp]) => xp > 0).sort((a, b) => b[1] - a[1]) : [];
 	const total = skills.reduce((sum, [, xp]) => sum + xp, 0);
+	// checking a map off, at this rate or every rate, takes it out of screening
+	const checkedSet = readChecked();
+	const rateOff = checkedSet.has(`${picked.beatmapId}@${picked.rate}`);
+	const mapOff = checkedSet.has(`${picked.beatmapId}@*`);
+	const flip = (rate?: number) => { toggleChecked(picked.beatmapId, rate); setChecks(n => n + 1); };
+	const checkBtn = { cursor: 'pointer', background: '#2b2b3a', color: '#ddd', border: 'none', borderRadius: 3, padding: '1px 6px', fontSize: 10, marginRight: 4 } as const;
 
 	return (
 		<div
@@ -172,12 +180,17 @@ export default function SevenBox({ version }: { version: number }) {
 			onDoubleClick={() => { setPos(undefined); try { localStorage.removeItem(POS_KEY); } catch { /* not kept */ } }}
 		>
 			<div className="last-play__head">7K · Last play at {label}</div>
+			<div style={{ margin: '3px 0' }} onPointerDown={e => e.stopPropagation()}>
+				<button style={{ ...checkBtn, background: rateOff ? '#166534' : checkBtn.background }} title={rateOff ? 'Put this rate back into screening' : 'Done with this map at this rate: screening skips it'} onClick={() => flip(picked.rate)}>{rateOff ? `✓ x${picked.rate} checked off` : `Check off x${picked.rate}`}</button>
+				<button style={{ ...checkBtn, background: mapOff ? '#166534' : checkBtn.background }} title={mapOff ? 'Put this map back into screening' : 'Done with this map at every rate: screening skips it'} onClick={() => flip()}>{mapOff ? '✓ whole map checked off' : 'Check off whole map'}</button>
+			</div>
 			{status && status !== 'tested' && (
 				<div className="last-play__none" style={{ color: status === 'open' || status === 'retest' ? '#fbbf24' : '#888' }}>
 					{status === 'open' ? 'Untested: next to screen'
 						: status === 'retest' ? 'Played under your accuracy bar, levels since: worth replaying'
 						: status === 'waiting' ? 'Untested: play the rate next to it towards x1 first'
 						: status === 'failed' ? 'Failed here: not passed yet'
+						: status === 'checked off' ? 'Checked off: screening skips it'
 						: `Ruled out: ${status}`}
 				</div>
 			)}

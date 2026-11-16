@@ -12,7 +12,7 @@ import { replacePlaylist } from '../engine/playlist.js';
 import {
 	attemptsOf, baseOf, failCeiling, levelSumNow, readFailRule, saveFailRule, type FailRule, MEDALS_KEY, medals7k, progress7k, readBars, recorderStatus, reachOf, ringOrder, screenState, testsOf, totalOf, type ScreenState,
 	type Attempt, type Progress7k,
-	importScores,
+	importScores, readChecked, clearChecked,
 } from '../engine/seven.js';
 import { formatTime, formatXp, NumberField, skillBreakdown, skillLabel, Tip } from './parts.js';
 
@@ -152,8 +152,10 @@ export default function SevenView({ character, version, onClose }: { character?:
 	const holding = attempts.filter(a => a.failed && a.startedAt > failRule.resetAt && levelNow - a.levelSum < Math.max(1, failRule.liftAfter)).length;
 	// nothing far harder than the hardest play passed yet (slowed into reach, a harder map still is)
 	const reach = useMemo(() => reachOf(attempts, id => byId.get(id)?.difficulty, failRule.reachMargin ?? 2), [attempts, byId, failRule.reachMargin]);
+	// maps checked off by hand (in the song select box): read again whenever the panel redraws
+	const checked = readChecked();
 	const stateAt = (m: Map7k, rate: number): ScreenState => screenState(tests.get(`${m.beatmapId}|`), rate, {
-		levelSum: levelNow, rule: failRule, stars: m.difficulty, ceiling, reach,
+		levelSum: levelNow, rule: failRule, stars: m.difficulty, ceiling, reach, beatmapId: m.beatmapId, checked,
 		xpsAt: r => byKey.get(`${m.beatmapId}@${Math.round(r * 100) / 100}`)?.perSecond,
 	});
 
@@ -529,6 +531,8 @@ export default function SevenView({ character, version, onClose }: { character?:
 								level-ups
 							</label>
 							<span className="hint">{holding ? `${holding} fail${holding === 1 ? '' : 's'} skipping maps now` : 'no fails skipping maps'}</span>
+							<span className="hint" title="Checked off in the song select box: screening skips them">{checked.size} checked off</span>
+							<button disabled={!checked.size} onClick={() => { if (window.confirm(`Put all ${checked.size} checked-off maps back into screening?`)) { clearChecked(); setSaved('Check-offs cleared.'); } }}>Clear check-offs</button>
 							<button disabled={!holding} onClick={() => setFailRule({ ...failRule, resetAt: Date.now() })}
 								title="Stop every fail so far from skipping maps: they are tested again. Fails from now on skip as usual.">
 								Retest failed now

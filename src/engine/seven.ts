@@ -727,7 +727,30 @@ export type ScreenState =
 	/** a fail at a slower rate, or on an easier map, holds */
 	| 'too hard'
 	/** far harder (x1 stars × rate) than the hardest play passed yet */
-	| 'out of reach';
+	| 'out of reach'
+	/** checked off by hand: screening skips it */
+	| 'checked off';
+
+// ---- maps checked off by hand ----
+
+/** Map and rate (`beatmapId@rate`), or a whole map (`beatmapId@*`), that screening skips: kept across restarts. */
+const CHECKED_KEY = 'seven-tracker:checked';
+export const readChecked = (): Set<string> => {
+	try { return new Set(JSON.parse(localStorage.getItem(CHECKED_KEY) ?? '[]') as string[]); } catch { return new Set(); }
+};
+const writeChecked = (set: Set<string>) => { try { localStorage.setItem(CHECKED_KEY, JSON.stringify([...set])); } catch { /* not kept */ } };
+export const checkedKey = (beatmapId: number, rate?: number) => `${beatmapId}@${rate === undefined ? '*' : round2(rate)}`;
+/** Check a map at a rate (or every rate) off, or back on. */
+export const toggleChecked = (beatmapId: number, rate?: number): boolean => {
+	const set = readChecked();
+	const key = checkedKey(beatmapId, rate);
+	const on = !set.has(key);
+	if (on) set.add(key); else set.delete(key);
+	writeChecked(set);
+	return on;
+};
+export const clearChecked = () => writeChecked(new Set());
+export const isChecked = (set: Set<string>, beatmapId: number, rate: number) => set.has(checkedKey(beatmapId)) || set.has(checkedKey(beatmapId, rate));
 
 /**
  * How hard a play may be (x1 stars × rate) to be screened: `margin` stars above the hardest play
@@ -754,6 +777,9 @@ export type ScreenContext = {
 	ceiling: number;
 	/** the hardest a play may be (x1 stars × rate) to be screened: {@link reachOf} */
 	reach?: number;
+	/** the map, and the maps and rates checked off by hand ({@link readChecked}) */
+	beatmapId?: number;
+	checked?: Set<string>;
 };
 
 /**
@@ -766,6 +792,7 @@ export type ScreenContext = {
  */
 export const screenState = (t: MapTests | undefined, rate: number, c: ScreenContext): ScreenState => {
 	const r = round2(rate);
+	if (c.beatmapId !== undefined && c.checked && isChecked(c.checked, c.beatmapId, r)) return 'checked off';
 	const at = (x: number) => t?.byRate.get(round2(x)) ?? [];
 	const passed = (x: number) => at(x).some(a => !a.failed);
 	const last = at(r).filter(a => !a.failed).at(-1);
