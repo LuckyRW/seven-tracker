@@ -281,14 +281,22 @@ const writeAttempts = (all: Attempt[]): boolean => {
  * most 30 minutes before it; the newest scores are left a while for the recorder to take first.
  * Returns how many were added.
  */
+let sevenMapCache: Promise<Set<number>> | undefined;
+/** Every 7K map's id, from the game's map list (asked once). */
+const sevenMapIds = (): Promise<Set<number>> => (sevenMapCache ??= beatmapStore.difficulties()
+	.then(list => new Set(list.filter(({ version: v }) => v.mode === 3 && v.keys === 7).map(({ version: v }) => v.id)))
+	.catch(() => { sevenMapCache = undefined; return new Set<number>(); }));
+
 export const importScores = async (characterId: number): Promise<number> => {
 	let rows: { id: number; beatmapId: number; playedAt: number; rate: number; mods: string; accuracy: number; gains: string }[];
 	try {
 		await gameDb.ready();
 		rows = await gameDb.select(
 			`SELECT s.id AS id, s.beatmapId AS beatmapId, s.playedAt AS playedAt, s.rate AS rate, s.mods AS mods, s.accuracy AS accuracy, x.gains AS gains
-			 FROM score s JOIN score_xp x ON x.scoreId = s.id WHERE s.characterId = ? ORDER BY s.playedAt`, [characterId]);
+			 FROM score s LEFT JOIN score_xp x ON x.scoreId = s.id WHERE s.characterId = ? ORDER BY s.playedAt`, [characterId]);
 	} catch (err) { console.warn('[7K tracker] the scores could not be read:', err); return 0; }
+	// a pass that gave no XP has no score_xp row, and no XP to tell its mode by: a 7K map's has 7 keys
+	const sevenMaps = await sevenMapIds();
 	const all = readAttempts();
 	const imported = new Set(all.filter(a => a.token.startsWith('score:')).map(a => a.token));
 	const used = new Set<string>();
@@ -300,7 +308,7 @@ export const importScores = async (characterId: number): Promise<number> => {
 		if (imported.has(token) || Number(r.playedAt) > fresh) continue;
 		let gains: Record<string, number> = {};
 		try { gains = JSON.parse(String(r.gains || '{}')) as Record<string, number>; } catch { continue; }
-		if (!Object.keys(gains).some(k => ONLY_7K.has(k) && gains[k] > 0)) continue;
+		if (!sevenMaps.has(Number(r.beatmapId)) && !Object.keys(gains).some(k => ONLY_7K.has(k) && gains[k] > 0)) continue;
 		const rate = round2(Number(r.rate) || 1);
 		const at = Number(r.playedAt);
 		// the recorded play it is, if any: the latest of that map and rate started before it
