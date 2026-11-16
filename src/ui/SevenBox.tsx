@@ -46,8 +46,8 @@ const selection = (speedUpgrades: number): Picked | undefined => {
 		const letters = (mods.match(/.{2}/g) ?? []) as Mod[];
 		return { beatmapId, rate: Math.round(Number(rate) * 100) / 100, mods: modsKey(letters) };
 	}
-	const rate = Math.round(allowedRate(stored('rate', 1), speedUpgrades) * 100) / 100;
-	return { beatmapId, rate, mods: modsKey(parseMods(stored<Mod[]>('mods', []).join(','))) };
+	const rate = Math.round(allowedRate(stored('rate:mania7k', stored('rate', 1)), speedUpgrades) * 100) / 100;
+	return { beatmapId, rate, mods: modsKey(parseMods(stored<Mod[]>('mods:mania7k', stored<Mod[]>('mods', [])).join(','))) };
 };
 
 const ago = (ms: number) => {
