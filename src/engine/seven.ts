@@ -101,6 +101,10 @@ type Row = Record<string, number | string>;
 /** The 7K character the server last sent (`character` on the game's socket: on connecting, and
  *  whenever it changes), kept so the progress is known before the next one comes. */
 const SENT_KEY = 'seven-tracker:character';
+/** The character the server last sent in 7K: whose a 7K play is, whichever character the game has selected. */
+const sevenCharacterId = (): number | undefined => {
+	try { return (JSON.parse(localStorage.getItem(SENT_KEY) ?? 'null') as { id?: number } | null)?.id || undefined; } catch { return undefined; }
+};
 type SentSkill = { level: number; xp: number; upgrades: number; overdrive: number; prestige: number; lifetimeXp?: number };
 type Sent = { id: number; skills: Record<string, SentSkill>; genetics?: unknown; at: number };
 
@@ -303,6 +307,7 @@ export const importScores = async (characterId: number): Promise<number> => {
 	const live = all.filter(a => !a.failed && !a.token.startsWith('score:'));
 	const fresh = Date.now() - 2 * 60_000;
 	let added = 0;
+	let fixed = 0;
 	for (const r of rows) {
 		const token = `score:${r.id}`;
 		if (imported.has(token) || Number(r.playedAt) > fresh) continue;
@@ -315,7 +320,12 @@ export const importScores = async (characterId: number): Promise<number> => {
 		const match = live
 			.filter(a => !used.has(a.token) && a.beatmapId === Number(r.beatmapId) && round2(a.rate) === rate && a.startedAt <= at && at - a.startedAt < 30 * 60_000)
 			.at(-1);
-		if (match) { used.add(match.token); continue; }
+		if (match) {
+			used.add(match.token);
+			// a play kept for whichever character was selected when it ended: the score says whose it was
+			if (match.characterId !== characterId) { match.characterId = characterId; fixed++; }
+			continue;
+		}
 		all.push({
 			token, characterId, beatmapId: Number(r.beatmapId), rate, mods: modsKey(parseMods(String(r.mods ?? ''))),
 			startedAt: at, fatigue: 0, failed: false, accuracy: accuracyOf(r.accuracy), gains,
@@ -323,12 +333,13 @@ export const importScores = async (characterId: number): Promise<number> => {
 		});
 		added++;
 	}
-	if (added) {
+	if (added || fixed) {
 		all.sort((a, b) => a.startedAt - b.startedAt);
 		writeAttempts(all);
-		console.info(`[7K tracker] ${added} 7K plays taken from the game's scores`);
+		if (added) console.info(`[7K tracker] ${added} 7K plays taken from the game's scores`);
+		if (fixed) console.info(`[7K tracker] ${fixed} 7K plays moved to character ${characterId}, whose scores they are`);
 	}
-	return added;
+	return added + fixed;
 };
 
 /** The medals' multiplier: the same on every skill, so it changes no ranking; typed in by the player. */
@@ -412,7 +423,7 @@ export const recordPlays = (
 		const sevenFail = result.failed === true && state !== undefined && sevenMaps.has(state.beatmapId);
 		if (!sevenFail && !gains.some(g => ONLY_7K.has(g.skill))) return undefined;
 		const beatmapId = score?.beatmapId ?? state?.beatmapId;
-		const id = characterId() ?? lastId;
+		const id = sevenCharacterId() ?? characterId() ?? lastId;
 		if (!beatmapId || id === undefined) { console.warn(`[7K tracker] 7K result ${token.slice(0, 6)} not recorded: ${beatmapId ? 'no character yet' : 'its map is unknown'}`); return undefined; }
 		console.info(`[7K tracker] recording a 7K play whose start was not seen: ${beatmapId}`);
 		return {
@@ -447,7 +458,7 @@ export const recordPlays = (
 			// a joined start resumes a play (a reload, a rejoin): kept as first seen, or taken up if missed
 			if (started.has(String(msg.result.token)) || done.has(String(msg.result.token))) return;
 			const r = msg.result as { token: string; beatmapId: number; rate: number; mods?: Mod[]; fatigue?: number; warmupBar?: number };
-			const id = characterId() ?? lastId;
+			const id = sevenCharacterId() ?? characterId() ?? lastId;
 			if (id === undefined) { recorderStatus.problem = 'a 7K play started before the character was known'; console.warn('[7K tracker] 7K play not recorded: no character yet'); return; }
 			lastId = id;
 			const at = Date.now();
@@ -473,6 +484,12 @@ export const recordPlays = (
 			if (done.has(msg.token)) return;
 			const play = started.get(msg.token) ?? unstarted(msg.token, msg.result);
 			if (!play) return;
+			// the score names whose play it was: another character may be selected in the game meanwhile
+			const scoredBy = Number((msg.result.score as { characterId?: unknown } | undefined)?.characterId);
+			if (scoredBy && scoredBy !== play.characterId) {
+				console.info(`[7K tracker] 7K play kept for character ${scoredBy}, not ${play.characterId}`);
+				play.characterId = scoredBy;
+			}
 			// the read at its start failed or has not come back: the last progress read instead, so its
 			// multipliers still come out of its XP
 			if (!play.progress && latestProgress) {
