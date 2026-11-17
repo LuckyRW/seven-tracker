@@ -602,6 +602,16 @@ export const recordPlays = (
 // ---- what an attempt was worth ----
 
 /** Base XP per skill: the server's multipliers taken back out. Mindblock is counted off the passes before it. */
+/** The skill's multiplier on this character's play nearest in time to `attempt` that has it. */
+const nearestOwn = (attempt: Attempt, all: readonly Attempt[], skill: string): number | undefined => {
+	let best: Attempt | undefined;
+	for (const a of all) {
+		if (a === attempt || a.characterId !== attempt.characterId || !(a.own[skill] > 0)) continue;
+		if (!best || Math.abs(a.startedAt - attempt.startedAt) < Math.abs(best.startedAt - attempt.startedAt)) best = a;
+	}
+	return best?.own[skill];
+};
+
 export const baseOf = (attempt: Attempt, before: readonly Attempt[]): Record<string, number> => {
 	const recent = before
 		.filter(a => !a.failed && a.characterId === attempt.characterId && a.startedAt < attempt.startedAt && a.startedAt >= attempt.startedAt - RECENT_MS)
@@ -614,8 +624,10 @@ export const baseOf = (attempt: Attempt, before: readonly Attempt[]): Record<str
 	return Object.fromEntries(Object.entries(attempt.gains).map(([skill, xp]) => {
 		// genetics stay in: base XP is what the character earns with the genes it has (they are kept,
 		// per play, in `genetics`)
-		// a play recorded without its multipliers: today's, which is closer than none
-		const own = attempt.own[skill] || latestProgress?.own[skill] || 1;
+		// a play recorded without its multipliers (imported, or no progress read): the multipliers of
+		// this character's play nearest in time, since upgrades and prestiges change them; today's
+		// only when no play has them
+		const own = attempt.own[skill] || nearestOwn(attempt, before, skill) || latestProgress?.own[skill] || 1;
 		const by = own * medals * modXp(mods, skill)
 			* (MINDBLOCK.has(skill) ? block : 1) * (PHYSICAL.has(skill) ? tired : 1);
 		return [skill, by > 0 ? xp / by : 0];

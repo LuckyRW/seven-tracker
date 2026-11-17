@@ -51,6 +51,12 @@ const before = Array.from({ length: 25 }, (_, i) => attempt({ startedAt: 1e12 - 
 const blocked = m.baseOf(attempt({}), before);
 check('25 recent passes: mindblock x0.25 taken off accuracy', near(blocked.accuracy, 400), blocked.accuracy);
 check('physical skills are not mindblocked', near(blocked.speed, 100), blocked.speed);
+// a play without its multipliers takes the nearest play's in time, not today's (a prestige drops them)
+const old = attempt({ startedAt: 1e12 - 5 * 864e5, own: { accuracy: 4 } });
+const newer = attempt({ startedAt: 1e12 + 5 * 864e5, own: { accuracy: 1.1 } });
+const imported = attempt({ startedAt: 1e12 - 4 * 864e5, beatmapId: 11 });
+const fromNear = m.baseOf(imported, [old, imported, newer]);
+check('no multipliers: the nearest plays are used', near(fromNear.accuracy, 25), fromNear.accuracy);
 
 // the rule-outs
 const plays = [
