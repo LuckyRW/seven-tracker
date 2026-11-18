@@ -664,36 +664,30 @@ const baseWith = (attempt: Attempt, before: readonly Attempt[], ownOf: (skill: s
 
 /** Base XP per skill: the server's multipliers taken back out. Mindblock is counted off the passes before it. */
 export const baseOf = (attempt: Attempt, before: readonly Attempt[]): Record<string, number> => {
-	// the same map at the same rate, other passes: imported ones too, with the multipliers of the
-	// live play nearest before them
+	const skills = Object.keys(attempt.gains);
+	if (skills.every(skill => attempt.own[skill] > 0)) return baseWith(attempt, before, skill => attempt.own[skill]);
+	// a play recorded without its multipliers (imported, or no progress read): those of this
+	// character's plays just before and just after it. When they disagree (a prestige or upgrade in
+	// between), the one that puts the play nearest this map's other passes at the rate; with none
+	// to compare, the one before. Today's only when no play has them.
+	const fallback = (skill: string) => latestProgress?.own[skill] || 1;
+	const pick = (side: -1 | 1) => (skill: string) => attempt.own[skill] || nearestOwn(attempt, before, skill, side) || nearestOwn(attempt, before, skill, side < 0 ? 1 : -1) || fallback(skill);
+	const early = pick(-1);
+	const late = pick(1);
+	if (skills.every(skill => Math.abs(early(skill) - late(skill)) < 1e-9)) return baseWith(attempt, before, early);
+	const a = baseWith(attempt, before, early);
+	const b = baseWith(attempt, before, late);
 	const refs = before
 		.filter(o => o !== attempt && !o.failed && o.characterId === attempt.characterId && o.beatmapId === attempt.beatmapId
-			&& Math.abs(o.rate - attempt.rate) < 1e-9)
-		.map(o => baseWith(o, before, skill => o.own[skill] || nearestOwn(o, before, skill, -1) || nearestOwn(o, before, skill, 1) || 1));
-	const refTotal = median(refs.map(totalOf).filter(t => t > 0).sort((x, y) => x - y)) ?? 0;
-	const raw = baseWith(attempt, before, () => 1);
-	const fallback = (skill: string) => latestProgress?.own[skill] || 1;
-	// each skill's multiplier: the play's own (else the nearest live play's before it, else after,
-	// else today's), unless it puts that skill far off its share on the map's other passes and the
-	// plays around it do not: the game still giving the XP of upgrades a prestige just took away
-	const chosen = Object.fromEntries(Object.keys(attempt.gains).map(skill => {
-		const candidates = [attempt.own[skill], nearestOwn(attempt, before, skill, -1), nearestOwn(attempt, before, skill, 1), fallback(skill)]
-			.filter((m): m is number => m !== undefined && m > 0);
-		const first = candidates[0];
-		const ref = median(refs.map(r => r[skill] ?? 0).filter(v => v > 0).sort((x, y) => x - y));
-		// a skill with next to no XP on the map is too noisy to judge
-		if (ref === undefined || ref < Math.max(0.5, 0.05 * refTotal) || !(raw[skill] > 0)) return [skill, first];
-		if (offBy(raw[skill] / first, ref) < Math.log(SUSPECT)) return [skill, first];
-		const best = candidates.reduce((x, y) => (offBy(raw[skill] / y, ref) < offBy(raw[skill] / x, ref) ? y : x));
-		return [skill, offBy(raw[skill] / best, ref) < Math.log(SUSPECT) ? best : first];
-	}));
-	return baseWith(attempt, before, skill => chosen[skill]);
+			&& Math.abs(o.rate - attempt.rate) < 1e-9 && Object.keys(o.gains).every(skill => o.own[skill] > 0))
+		.map(o => totalOf(baseWith(o, before, skill => o.own[skill])))
+		.filter(t => t > 0)
+		.sort((x, y) => x - y);
+	if (!refs.length) return a;
+	const ref = refs[Math.floor(refs.length / 2)];
+	const off = (t: number) => (t > 0 ? Math.abs(Math.log(t / ref)) : Infinity);
+	return off(totalOf(b)) < off(totalOf(a)) ? b : a;
 };
-
-/** How far a skill's base XP/s may stray from the map's other passes before its multiplier is doubted. */
-const SUSPECT = 1.6;
-const median = (sorted: number[]) => (sorted.length ? sorted[Math.floor(sorted.length / 2)] : undefined);
-const offBy = (t: number, ref: number) => (t > 0 ? Math.abs(Math.log(t / ref)) : Infinity);
 
 export const totalOf = (xp: Record<string, number>) => Object.values(xp).reduce((a, b) => a + b, 0);
 
