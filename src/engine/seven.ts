@@ -667,8 +667,9 @@ export const baseOf = (attempt: Attempt, before: readonly Attempt[]): Record<str
 	const skills = Object.keys(attempt.gains);
 	const refs = () => before
 		.filter(o => o !== attempt && !o.failed && o.characterId === attempt.characterId && o.beatmapId === attempt.beatmapId
-			&& Math.abs(o.rate - attempt.rate) < 1e-9 && Object.keys(o.gains).every(skill => o.own[skill] > 0))
-		.map(o => totalOf(baseWith(o, before, skill => o.own[skill])))
+			&& Math.abs(o.rate - attempt.rate) < 1e-9)
+		// imported passes too, with the multipliers of the live play nearest before them
+		.map(o => totalOf(baseWith(o, before, skill => o.own[skill] || nearestOwn(o, before, skill, -1) || nearestOwn(o, before, skill, 1) || 1)))
 		.filter(t => t > 0)
 		.sort((x, y) => x - y);
 	if (skills.every(skill => attempt.own[skill] > 0)) {
