@@ -39,6 +39,8 @@ type Measured = {
 	levelSum: number;
 	/** whether that total is in play levels (lifetime + prestige) or, for older plays, the Upgrades screen's */
 	playLevels: boolean;
+	/** play levels taken from the live play before it */
+	estimated?: boolean;
 };
 
 type Tab = 'playlist' | 'maps' | 'recent' | 'testing';
@@ -198,7 +200,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 				const prevPerSecond = before ? totalOf(baseOf(before, ordered)) / seconds : undefined;
 				rows.push({
 					map, rate, perSecond: totalOf(base) / seconds, skills: Object.fromEntries(Object.entries(base).map(([s, xp]) => [s, xp / seconds])), top, topPerSecond: topXp / seconds,
-					level: top ? last.levels[top] : undefined, at: last.startedAt, plays: list.length, fails: list.length - passes.length, levelSum: last.levelSum, playLevels: last.levelKind === 'play',
+					level: top ? last.levels[top] : undefined, at: last.startedAt, plays: list.length, fails: list.length - passes.length, levelSum: last.levelSum, playLevels: last.levelKind !== 'upgrades' && last.levelKind !== undefined, estimated: last.levelKind === 'estimated',
 					drift: d?.length ? d.reduce((x, y) => x + y, 0) / d.length : undefined,
 					prevPerSecond,
 				});
@@ -424,7 +426,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 									</span>
 									<Tip className="num strong" text={changeNote(row) + skillBreakdown(row.skills)}><span style={{ color: changeColor(row) }}>{formatXp(row.perSecond)}{changeArrow(row)}</span></Tip>
 									<span className="num" style={{ color: driftColor(row.drift) }}>{row.drift === undefined ? '–' : `${signed(row.drift)}m`}</span>
-									<span className="num muted" title={row.playLevels ? `${levelNow - row.levelSum} play levels (lifetime + prestige) gained since it was last passed` : 'Passed before play levels were kept: counted from the levels on the Upgrades screen, which read lower, so it cannot be counted. Replay it to fix.'}>{row.playLevels ? sinceLabel(levelNow - row.levelSum) : '?'}</span>
+									<span className="num muted" title={row.playLevels ? `${levelNow - row.levelSum} play levels (lifetime + prestige) gained since it was last passed${row.estimated ? ' (estimated: from the live play before it)' : ''}` : 'Passed before play levels were kept: counted from the levels on the Upgrades screen, which read lower, so it cannot be counted. Replay it to fix.'}>{row.playLevels ? `${row.estimated ? '~' : ''}${sinceLabel(levelNow - row.levelSum)}` : '?'}</span>
 									<button className="icon" aria-label="Remove from the playlist" title="Remove" onClick={() => toggle(key)}>✕</button>
 								</div>
 							);
@@ -499,7 +501,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 										{row.top ? <>{skillLabel(row.top)} <span className="muted">Lv {row.level ?? '?'}</span></> : ''}
 									</span>
 									<span className="num" style={{ color: driftColor(row.drift) }}>{row.drift === undefined ? '–' : `${signed(row.drift)}m`}</span>
-									<span className="num muted" title={row.playLevels ? `${levelNow - row.levelSum} play levels (lifetime + prestige) gained since it was last passed` : 'Passed before play levels were kept: counted from the levels on the Upgrades screen, which read lower, so it cannot be counted. Replay it to fix.'}>{row.playLevels ? sinceLabel(levelNow - row.levelSum) : '?'}</span>
+									<span className="num muted" title={row.playLevels ? `${levelNow - row.levelSum} play levels (lifetime + prestige) gained since it was last passed${row.estimated ? ' (estimated: from the live play before it)' : ''}` : 'Passed before play levels were kept: counted from the levels on the Upgrades screen, which read lower, so it cannot be counted. Replay it to fix.'}>{row.playLevels ? `${row.estimated ? '~' : ''}${sinceLabel(levelNow - row.levelSum)}` : '?'}</span>
 									<span className="num muted" title={`last played ${new Date(row.at).toLocaleString()}`}>{row.plays}{row.fails ? ` (${row.fails}✗)` : ''}</span>
 								</div>
 							);

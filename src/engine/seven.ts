@@ -250,7 +250,7 @@ export type Attempt = {
 	/** the level total after it: its result's levels, for when the 7K progress cannot be read */
 	levelSumAfter?: number;
 	/** which levels these are: play levels (lifetime + prestige, never down), or the Upgrades screen's (older plays) */
-	levelKind?: 'play' | 'upgrades';
+	levelKind?: 'play' | 'upgrades' | 'estimated';
 	own: Record<string, number>;
 	genetics: Record<string, number>;
 };
@@ -262,7 +262,23 @@ const MAX_ATTEMPTS = 6000;
 export const attemptsOf = (characterId: number): Attempt[] => {
 	const all = readAttempts();
 	const own = all.filter(a => a.characterId === characterId);
-	return own.length ? own : all;
+	return withPlayLevels(own.length ? own : all);
+};
+
+/**
+ * Plays saved without play levels (older ones, imported ones) take the play levels of the nearest
+ * live play before them, the levels the character had when it was last seen; with none before,
+ * the nearest after. Marked 'estimated'; only for reading, never saved.
+ */
+export const withPlayLevels = (list: readonly Attempt[]): Attempt[] => {
+	const known = list.filter(a => a.levelKind === 'play').sort((a, b) => a.startedAt - b.startedAt);
+	if (!known.length) return [...list];
+	return list.map(a => {
+		if (a.levelKind === 'play') return a;
+		let from = known[0];
+		for (const k of known) { if (k.startedAt <= a.startedAt) from = k; else break; }
+		return { ...a, levels: { ...from.levels }, levelSum: from.levelSum, levelSumAfter: undefined, levelKind: 'estimated' };
+	});
 };
 
 export const readAttempts = (): Attempt[] => {

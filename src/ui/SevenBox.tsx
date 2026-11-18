@@ -158,7 +158,7 @@ export default function SevenBox({ version }: { version: number }) {
 			const maxRate = allowedRate(1.5, progress?.speedUpgrades ?? 0);
 			setStatus(screenState(tests, picked.rate, { beatmapId: picked.beatmapId, checked: readChecked(), topCut, maxRate, levelSum, rule, stars: own ?? 0, ceiling: failCeiling(all, levelSum, id => stars.get(id), rule), xpsAt, reach: reachOf(all, id => stars.get(id), rule.reachMargin ?? 2) }));
 			const last = tests?.byRate.get(picked.rate)?.filter(a => !a.failed).at(-1);
-			setPlay(last ? { playedAt: last.startedAt, base: baseOf(last, all), seconds: length / last.rate, levels: last.levels, since: levelSum - last.levelSum, playLevels: last.levelKind === 'play' } : null);
+			setPlay(last ? { playedAt: last.startedAt, base: baseOf(last, all), seconds: length / last.rate, levels: last.levels, since: levelSum - last.levelSum, playLevels: last.levelKind !== 'upgrades' && last.levelKind !== undefined } : null);
 		});
 		return () => { gone = true; };
 	}, [pickedKey, character?.id, lengths, stars, version, checks]);

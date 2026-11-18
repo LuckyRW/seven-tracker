@@ -177,6 +177,28 @@ check('the screening grid: every third, x1 and the fastest',
 	check('without them, the most a play left', m.levelSumNow([play], undefined) === 305);
 }
 
+// plays without play levels take the live play's before them (or after, with none before)
+{
+	const live = (t, sum) => ({ startedAt: t, levelKind: 'play', levels: { speed: sum }, levelSum: sum });
+	const old = (t) => ({ startedAt: t, levelKind: 'upgrades', levels: { speed: 3 }, levelSum: 3, levelSumAfter: 4 });
+	const out = m.withPlayLevels([old(5), live(10, 200), old(15), live(20, 210)]);
+	check('levels from the live play before it', out[2].levelSum === 200 && out[2].levelKind === 'estimated', out[2].levelSum);
+	check('none before: the one after', out[0].levelSum === 200, out[0].levelSum);
+	check('live plays untouched', out[3].levelSum === 210 && out[3].levelKind === 'play');
+	check('no live plays: left as they were', m.withPlayLevels([old(5)])[0].levelSum === 3);
+}
+
+// plays without play levels take the live play's before them (or after, with none before)
+{
+	const live = (t, sum) => ({ startedAt: t, levelKind: 'play', levels: { speed: sum }, levelSum: sum });
+	const old = (t) => ({ startedAt: t, levelKind: 'upgrades', levels: { speed: 3 }, levelSum: 3, levelSumAfter: 4 });
+	const out = m.withPlayLevels([old(5), live(10, 200), old(15), live(20, 210)]);
+	check('levels from the live play before it', out[2].levelSum === 200 && out[2].levelKind === 'estimated', out[2].levelSum);
+	check('none before: the one after', out[0].levelSum === 200, out[0].levelSum);
+	check('live plays untouched', out[3].levelSum === 210 && out[3].levelKind === 'play');
+	check('no live plays: left as they were', m.withPlayLevels([old(5)])[0].levelSum === 3);
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;
