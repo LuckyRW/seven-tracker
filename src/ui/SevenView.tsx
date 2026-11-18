@@ -13,6 +13,7 @@ import {
 	attemptsOf, baseOf, failCeiling, levelSumNow, readFailRule, saveFailRule, type FailRule, MEDALS_KEY, medals7k, progress7k, readBars, recorderStatus, reachOf, ringOrder, screenState, testsOf, totalOf, type ScreenState,
 	type Attempt, type Progress7k,
 	importScores, readChecked, clearChecked,
+	geneSaves, saveGenes, genesCounted, setGenesCounted, SKILLS_7K,
 } from '../engine/seven.js';
 import { formatTime, formatXp, NumberField, skillBreakdown, skillLabel, Tip } from './parts.js';
 
@@ -43,7 +44,7 @@ type Measured = {
 	estimated?: boolean;
 };
 
-type Tab = 'playlist' | 'maps' | 'recent' | 'testing';
+type Tab = 'playlist' | 'maps' | 'recent' | 'testing' | 'genes';
 
 const MAX_ENTRIES_DEFAULT = 200;
 const MAX_REPEAT = 100;
@@ -107,6 +108,9 @@ export default function SevenView({ character, version, onClose }: { character?:
 	const [attempts, setAttempts] = useState<Attempt[]>([]);
 	const [medals, setMedals] = useState(medals7k());
 	const [saved, setSaved] = useState('');
+	const [genesOn, setGenesOnState] = useState(genesCounted());
+	const setGenesOn = (on: boolean) => { setGenesCounted(on); setGenesOnState(on); };
+	const [geneVersion, setGeneVersion] = useState(0);
 
 	// the recorder's status changes on its own: drawn again every few seconds
 	const [, setTick] = useState(0);
@@ -208,7 +212,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 		}
 		return rows.sort((a, b) => b.perSecond - a.perSecond);
 	// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [tests, byId, attempts, medals, progress]);
+	}, [tests, byId, attempts, medals, progress, genesOn, geneVersion]);
 	const byKey = useMemo(() => new Map(measured.map(r => [rowKey(r), r])), [measured]);
 	const ordered = useMemo(() => [...attempts].sort((a, b) => a.startedAt - b.startedAt), [attempts]);
 	const recent = useMemo(() => ordered.slice(-RECENT_SHOWN).reverse(), [ordered]);
@@ -381,6 +385,9 @@ export default function SevenView({ character, version, onClose }: { character?:
 					<button className={tab === 'testing' ? 'on' : ''} onClick={() => setTab('testing')}>
 						Testing
 					</button>
+					<button className={tab === 'genes' ? 'on' : ''} onClick={() => setTab('genes')}>
+						Genes {!genesOn && <span className="count">off</span>}
+					</button>
 				</nav>
 				<span className="spacer" />
 				<span className="hint" title={statusTitle} style={{ color: recorderStatus.problem ? '#fbbf24' : listening ? '#4ade80' : 'var(--faint, #888)' }}>
@@ -511,11 +518,52 @@ export default function SevenView({ character, version, onClose }: { character?:
 				</section>
 			)}
 
+			{tab === 'genes' && (() => {
+				const id = Number(character?.id);
+				const history = geneSaves().filter(g => g.characterId === id).slice().reverse();
+				const now = progress?.genetics ?? {};
+				const shown = (g: Record<string, number>) => SKILLS_7K.filter(s => Math.abs((g[s] ?? 1) - 1) > 1e-9)
+					.map(s => `${skillLabel(s)} x${(g[s] ?? 1).toFixed(2)}`).join(' · ') || 'none';
+				return (
+					<section className="maps target">
+						<div className="target-form">
+							<p className="hint">
+								Your genes multiply each skill's XP. With them counted (the default), base XP is what you earn with the genes you have, so maps that train your gene skills rank higher.
+								Switched off, each play's genes are taken out like the upgrades, so maps compare on the map alone. Every play keeps the genes it was played with;
+								the genes are also saved here each time they change, for plays that kept none.
+							</p>
+							<div className="target-row">
+								<label className="strain-filter" title="Off: base XP leaves the genes out too">
+									<input type="checkbox" checked={genesOn} onChange={e => setGenesOn(e.target.checked)} /> Count genes in base XP
+								</label>
+								<span className="spacer" />
+								<button disabled={!progress || !character} onClick={() => {
+									if (!progress || !character) return;
+									const changed = saveGenes(id, progress.genetics);
+									setGeneVersion(v => v + 1);
+									setSaved(changed ? 'Genes saved.' : 'These genes are already the last saved.');
+								}}>Save genes now</button>
+							</div>
+							<p className="hint">Now: <b>{progress ? shown(now) : 'not read yet'}</b></p>
+							<table className="seven-genes">
+								<thead><tr><th>Saved</th><th>Gene multipliers</th></tr></thead>
+								<tbody>
+									{history.map(g => (
+										<tr key={g.at}><td>{new Date(g.at).toLocaleString()}</td><td>{shown(g.genetics)}</td></tr>
+									))}
+									{!history.length && <tr><td colSpan={2}>Nothing saved yet.</td></tr>}
+								</tbody>
+							</table>
+						</div>
+					</section>
+				);
+			})()}
+
 			{tab === 'testing' && (
 				<section className="maps target">
 					<div className="target-form">
 						<p className="hint">
-							Every 7K play is recorded as it finishes, fails included. Base XP leaves out mindblock, fatigue, medals, mods and your upgrades (genes are kept in), so maps compare fairly. Screening goes out from x1 one step at a time
+							Every 7K play is recorded as it finishes, fails included. Base XP leaves out mindblock, fatigue, medals, mods and your upgrades ({genesOn ? 'genes are kept in' : 'genes taken out too'}), so maps compare fairly. Screening goes out from x1 one step at a time
 							(x1 for every map, hardest first, then a step slower, then a step faster, and so on, within the rates your Speed has unlocked). A slower rate stays
 							in only while going slower raised XP/s; a faster rate opens once the one before it passed, and a fail closes the faster rates (and every harder
 							map) until the level-ups below. A rate that gave 0 XP closes the slower ones for good. Press Screening again after playing to take in the results.

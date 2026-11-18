@@ -224,6 +224,20 @@ check('the screening grid: every third, x1 and the fastest',
 	check('a play without XP levels: the nearest play’s', near(m.baseOf(old, [prestiged, old]).technical, scaled), m.baseOf(old, [prestiged, old]).technical);
 }
 
+// genes: kept in by default, taken out when switched off; a play without its own uses the save in effect
+{
+	const play = attempt({ beatmapId: 901, startedAt: 5000, genetics: {} , gains: { speed: 120 } });
+	m.saveGenes(play.characterId, { speed: 1.2 }, 1000);
+	m.saveGenes(play.characterId, { speed: 1.5 }, 9000);
+	check('genes save once per change', !m.saveGenes(play.characterId, { speed: 1.5 }, 9500));
+	check('a play without genes takes the save before it', near(m.geneticsAt(play).speed, 1.2), m.geneticsAt(play));
+	const on = m.baseOf(play, []).speed;
+	m.setGenesCounted(false);
+	const off = m.baseOf(play, []).speed;
+	m.setGenesCounted(true);
+	check('genes off divides them out', near(on / off, 1.2), [on, off]);
+	check('a play with its own genes keeps them', near(m.geneticsAt({ ...play, genetics: { speed: 1.3 } }).speed, 1.3));
+}
 rmSync(dir, { recursive: true, force: true });
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;

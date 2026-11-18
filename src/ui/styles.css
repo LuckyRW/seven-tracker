@@ -601,3 +601,6 @@ header {
 	box-shadow: 0 6px 18px rgba(0, 0, 0, .55); pointer-events: none;
 }
 .last-play__total { display: block; }
+.seven-genes { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+.seven-genes th, .seven-genes td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgb(255 255 255 / 8%); }
+.seven-genes th { color: var(--faint, #888); font-weight: 500; }

@@ -149,6 +149,44 @@ export const geneticsMultipliers = (json: string): Record<string, number> => {
 	}));
 };
 
+// ---- genes over time ----
+
+/** The genes' XP multipliers as they were from `at` on: saved on every progress read that changed them, or by hand. */
+export type GeneSave = { at: number; characterId: number; genetics: Record<string, number> };
+const GENES_KEY = 'oss-idle-sim:7k-genes';
+const GENES_OFF_KEY = 'oss-idle-sim:7k-genes-off';
+let geneCache: GeneSave[] | undefined;
+export const geneSaves = (): GeneSave[] => {
+	if (geneCache) return geneCache;
+	try { geneCache = JSON.parse(localStorage.getItem(GENES_KEY) ?? '[]') as GeneSave[]; } catch { geneCache = []; }
+	return geneCache;
+};
+const sameGenes = (a: Record<string, number>, b: Record<string, number>) =>
+	Object.keys({ ...a, ...b }).every(k => Math.abs((a[k] ?? 1) - (b[k] ?? 1)) < 1e-9);
+/** Keeps `genetics` as this character's genes from `at` on; nothing when they are what was saved last. */
+export const saveGenes = (characterId: number, genetics: Record<string, number>, at = Date.now()): boolean => {
+	const list = geneSaves().filter(g => g.characterId === characterId);
+	const last = list.at(-1);
+	if (last && sameGenes(last.genetics, genetics)) return false;
+	geneCache = [...geneSaves(), { at, characterId, genetics: { ...genetics } }];
+	try { localStorage.setItem(GENES_KEY, JSON.stringify(geneCache)); } catch { /* kept for this session only */ }
+	return true;
+};
+/** Whether base XP keeps the genes' multiplier in (the default) or takes it out like the upgrades. */
+export const genesCounted = (): boolean => {
+	try { return localStorage.getItem(GENES_OFF_KEY) !== '1'; } catch { return true; }
+};
+export const setGenesCounted = (on: boolean) => {
+	try { if (on) localStorage.removeItem(GENES_OFF_KEY); else localStorage.setItem(GENES_OFF_KEY, '1'); } catch { /* none */ }
+};
+/** The genes a play was played with: its own when it kept any, else the save in effect when it started. */
+export const geneticsAt = (attempt: Pick<Attempt, 'genetics' | 'characterId' | 'startedAt'>): Record<string, number> => {
+	const own = attempt.genetics ?? {};
+	if (Object.values(own).some(v => Math.abs(v - 1) > 1e-9)) return own;
+	const before = geneSaves().filter(g => g.characterId === attempt.characterId && g.at <= attempt.startedAt).at(-1);
+	return before?.genetics ?? own;
+};
+
 // ---- the character ----
 
 export type Progress7k = {
@@ -285,6 +323,7 @@ export const progress7k = async (characterId: number): Promise<Progress7k | unde
 		xpLevels: Object.fromEntries(SKILLS_7K.map(s => [s, num(s)])),
 	};
 	latestProgress = progress;
+	if (String(row.geneticsJson ?? '')) saveGenes(characterId, progress.genetics);
 	return progress;
 };
 
@@ -722,12 +761,14 @@ const baseWith = (attempt: Attempt, before: readonly Attempt[], ownOf: (skill: s
 	const mods = parseMods(attempt.mods);
 	const medals = medals7k();
 	const xpLevels = xpLevelsOf(attempt, before);
+	const genesOut = !genesCounted();
+	const genes = genesOut ? geneticsAt(attempt) : {};
 	// its play level: the play's own, else its XP level (nothing to scale)
 	const playLevel = (skill: string) => (attempt.levelKind !== 'upgrades' && attempt.levels[skill] !== undefined ? attempt.levels[skill] : xpLevels?.[skill] ?? 0);
 	return Object.fromEntries(Object.entries(attempt.gains).map(([skill, xp]) => {
-		// genetics stay in: base XP is what the character earns with the genes it has (they are kept,
-		// per play, in `genetics`)
-		const by = ownOf(skill) * medals * modXp(mods, skill)
+		// genetics stay in by default: base XP is what the character earns with the genes it has.
+		// With genes switched off, the play's genes are taken out too
+		const by = ownOf(skill) * (genesOut ? (genes[skill] || 1) : 1) * medals * modXp(mods, skill)
 			* (MINDBLOCK.has(skill) ? block : 1) * (PHYSICAL.has(skill) ? tired : 1)
 			// the level factors: a skill just prestiged earns more until it climbs back, taken out
 			* (xpLevels?.[skill] !== undefined ? levelScale(skill, xpLevels[skill], playLevel(skill), attempt.accuracy) : 1);
