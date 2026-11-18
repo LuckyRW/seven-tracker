@@ -57,6 +57,18 @@ const newer = attempt({ startedAt: 1e12 + 5 * 864e5, own: { accuracy: 1.1 } });
 const imported = attempt({ startedAt: 1e12 - 4 * 864e5, beatmapId: 11 });
 const fromNear = m.baseOf(imported, [old, imported, newer]);
 check('no multipliers: the nearest plays are used', near(fromNear.accuracy, 25), fromNear.accuracy);
+// a prestige between the plays around it: the multipliers that match the map's other passes win
+const accOnly = (x) => ({ accuracy: x });
+const prePrestige = attempt({ startedAt: 1e12 - 10 * 864e5, beatmapId: 13, gains: accOnly(400), own: { accuracy: 4 } });
+const afterImport = attempt({ startedAt: 1e12, beatmapId: 12, gains: accOnly(100) });
+const postPrestige = attempt({ startedAt: 1e12 + 864e5, beatmapId: 13, gains: accOnly(100), own: { accuracy: 1 } });
+const sameMap = attempt({ startedAt: 1e12 + 2 * 864e5, beatmapId: 12, gains: accOnly(100), own: { accuracy: 1 } });
+const chosen = m.baseOf(afterImport, [prePrestige, afterImport, postPrestige, sameMap]);
+check('prestige in between: the multipliers matching the map’s other passes', near(chosen.accuracy, 100), chosen.accuracy);
+const beforeImport = attempt({ startedAt: 1e12 - 864e5, beatmapId: 12, gains: accOnly(400) });
+const sameMapOld = attempt({ startedAt: 1e12 - 20 * 864e5, beatmapId: 12, gains: accOnly(400), own: { accuracy: 4 } });
+const chosenOld = m.baseOf(beforeImport, [sameMapOld, prePrestige, beforeImport, postPrestige]);
+check('played before the prestige: the multipliers from before it', near(chosenOld.accuracy, 100), chosenOld.accuracy);
 
 // the rule-outs
 const plays = [

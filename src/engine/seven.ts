@@ -601,18 +601,18 @@ export const recordPlays = (
 
 // ---- what an attempt was worth ----
 
-/** Base XP per skill: the server's multipliers taken back out. Mindblock is counted off the passes before it. */
-/** The skill's multiplier on this character's play nearest in time to `attempt` that has it. */
-const nearestOwn = (attempt: Attempt, all: readonly Attempt[], skill: string): number | undefined => {
+/** The skill's multiplier on this character's play nearest in time before (`side` -1) or after (+1) `attempt` that has it. */
+const nearestOwn = (attempt: Attempt, all: readonly Attempt[], skill: string, side: -1 | 1): number | undefined => {
 	let best: Attempt | undefined;
 	for (const a of all) {
 		if (a === attempt || a.characterId !== attempt.characterId || !(a.own[skill] > 0)) continue;
+		if (side < 0 ? a.startedAt > attempt.startedAt : a.startedAt < attempt.startedAt) continue;
 		if (!best || Math.abs(a.startedAt - attempt.startedAt) < Math.abs(best.startedAt - attempt.startedAt)) best = a;
 	}
 	return best?.own[skill];
 };
 
-export const baseOf = (attempt: Attempt, before: readonly Attempt[]): Record<string, number> => {
+const baseWith = (attempt: Attempt, before: readonly Attempt[], ownOf: (skill: string) => number): Record<string, number> => {
 	const recent = before
 		.filter(a => !a.failed && a.characterId === attempt.characterId && a.startedAt < attempt.startedAt && a.startedAt >= attempt.startedAt - RECENT_MS)
 		.slice(-RECENT_LIMIT)
@@ -624,14 +624,37 @@ export const baseOf = (attempt: Attempt, before: readonly Attempt[]): Record<str
 	return Object.fromEntries(Object.entries(attempt.gains).map(([skill, xp]) => {
 		// genetics stay in: base XP is what the character earns with the genes it has (they are kept,
 		// per play, in `genetics`)
-		// a play recorded without its multipliers (imported, or no progress read): the multipliers of
-		// this character's play nearest in time, since upgrades and prestiges change them; today's
-		// only when no play has them
-		const own = attempt.own[skill] || nearestOwn(attempt, before, skill) || latestProgress?.own[skill] || 1;
-		const by = own * medals * modXp(mods, skill)
+		const by = ownOf(skill) * medals * modXp(mods, skill)
 			* (MINDBLOCK.has(skill) ? block : 1) * (PHYSICAL.has(skill) ? tired : 1);
 		return [skill, by > 0 ? xp / by : 0];
 	}));
+};
+
+/** Base XP per skill: the server's multipliers taken back out. Mindblock is counted off the passes before it. */
+export const baseOf = (attempt: Attempt, before: readonly Attempt[]): Record<string, number> => {
+	const skills = Object.keys(attempt.gains);
+	if (skills.every(skill => attempt.own[skill] > 0)) return baseWith(attempt, before, skill => attempt.own[skill]);
+	// a play recorded without its multipliers (imported, or no progress read): those of this
+	// character's plays just before and just after it. When they disagree (a prestige or upgrade in
+	// between), the one that puts the play nearest this map's other passes at the rate; with none
+	// to compare, the one before. Today's only when no play has them.
+	const fallback = (skill: string) => latestProgress?.own[skill] || 1;
+	const pick = (side: -1 | 1) => (skill: string) => attempt.own[skill] || nearestOwn(attempt, before, skill, side) || nearestOwn(attempt, before, skill, side < 0 ? 1 : -1) || fallback(skill);
+	const early = pick(-1);
+	const late = pick(1);
+	if (skills.every(skill => Math.abs(early(skill) - late(skill)) < 1e-9)) return baseWith(attempt, before, early);
+	const a = baseWith(attempt, before, early);
+	const b = baseWith(attempt, before, late);
+	const refs = before
+		.filter(o => o !== attempt && !o.failed && o.characterId === attempt.characterId && o.beatmapId === attempt.beatmapId
+			&& Math.abs(o.rate - attempt.rate) < 1e-9 && Object.keys(o.gains).every(skill => o.own[skill] > 0))
+		.map(o => totalOf(baseWith(o, before, skill => o.own[skill])))
+		.filter(t => t > 0)
+		.sort((x, y) => x - y);
+	if (!refs.length) return a;
+	const ref = refs[Math.floor(refs.length / 2)];
+	const off = (t: number) => (t > 0 ? Math.abs(Math.log(t / ref)) : Infinity);
+	return off(totalOf(b)) < off(totalOf(a)) ? b : a;
 };
 
 export const totalOf = (xp: Record<string, number>) => Object.values(xp).reduce((a, b) => a + b, 0);
