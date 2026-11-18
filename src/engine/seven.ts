@@ -39,6 +39,24 @@ const skillXPMultiplier = (upgrades: number, overdrive: number, prestige: number
 
 /** `mindblock.ts`: a map's plays among the character's last 50 in 24 hours. */
 const BLOCK_CB = cubic_bezier(.6, 0, .6, 1);
+/** The game's low-level XP boost (4K bots/character.ts xpFactorForLevel): up to x3 at XP level 0, gone at 40. */
+const LEVEL_CB = cubic_bezier(0, .8, .4, 1);
+export const lowLevelBoost = (xpLevel: number): number => 1 + (1 - LEVEL_CB(Math.min(1, Math.max(0, xpLevel / 40)))) * 2;
+/**
+ * Each skill's XP level before a play: its own, kept since v0.22.0; an older play's Upgrades-screen
+ * levels; else the nearest play's that has them, within 6 hours. Undefined when none does.
+ */
+const xpLevelsOf = (attempt: Attempt, all: readonly Attempt[]): Record<string, number> | undefined => {
+	const own = (a: Attempt) => a.xpLevels ?? (a.levelKind === 'upgrades' && Object.keys(a.levels).length ? a.levels : undefined);
+	const mine = own(attempt);
+	if (mine) return mine;
+	let best: Attempt | undefined;
+	for (const a of all) {
+		if (a.characterId !== attempt.characterId || !own(a) || Math.abs(a.startedAt - attempt.startedAt) > 6 * 3600_000) continue;
+		if (!best || Math.abs(a.startedAt - attempt.startedAt) < Math.abs(best.startedAt - attempt.startedAt)) best = a;
+	}
+	return best && own(best);
+};
 const mindblockFactor = (recentPlays: number) => lerp(1, 0.25, BLOCK_CB(Math.min(1, recentPlays / 25)));
 const RECENT_LIMIT = 50;
 const RECENT_MS = 24 * 3600 * 1000;
@@ -251,6 +269,8 @@ export type Attempt = {
 	levelSumAfter?: number;
 	/** which levels these are: play levels (lifetime + prestige, never down), or the Upgrades screen's (older plays) */
 	levelKind?: 'play' | 'upgrades' | 'estimated';
+	/** each skill's XP level (the Upgrades screen's) before the play: what the game's low-level XP boost reads */
+	xpLevels?: Record<string, number>;
 	own: Record<string, number>;
 	genetics: Record<string, number>;
 };
@@ -553,6 +573,7 @@ export const recordPlays = (
 				// the result's level gains are the Upgrades screen's: added only to that kind of total
 				levelSumAfter: playLevels ? undefined : levelSum + gainedLevels,
 				levelKind: playLevels ? 'play' : 'upgrades',
+				xpLevels: Object.fromEntries(gains.map(g => [g.skill, g.fromLevel])),
 				own: play.progress?.own ?? {},
 				genetics: play.progress?.genetics ?? {},
 			});
@@ -653,11 +674,14 @@ const baseWith = (attempt: Attempt, before: readonly Attempt[], ownOf: (skill: s
 	const tired = fatigueXp(attempt.fatigue);
 	const mods = parseMods(attempt.mods);
 	const medals = medals7k();
+	const xpLevels = xpLevelsOf(attempt, before);
 	return Object.fromEntries(Object.entries(attempt.gains).map(([skill, xp]) => {
 		// genetics stay in: base XP is what the character earns with the genes it has (they are kept,
 		// per play, in `genetics`)
 		const by = ownOf(skill) * medals * modXp(mods, skill)
-			* (MINDBLOCK.has(skill) ? block : 1) * (PHYSICAL.has(skill) ? tired : 1);
+			* (MINDBLOCK.has(skill) ? block : 1) * (PHYSICAL.has(skill) ? tired : 1)
+			// the low-level boost: a skill just prestiged earns more until XP level 40, taken out
+			* (xpLevels?.[skill] !== undefined ? lowLevelBoost(xpLevels[skill]) : 1);
 		return [skill, by > 0 ? xp / by : 0];
 	}));
 };

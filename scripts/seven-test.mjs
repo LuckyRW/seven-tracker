@@ -208,6 +208,16 @@ check('the screening grid: every third, x1 and the fastest',
 }
 
 
+// the low-level XP boost (x3 at XP level 0, none from 40) taken out
+{
+	check('x3 at level 0', near(m.lowLevelBoost(0), 3));
+	check('none at 40 and above', near(m.lowLevelBoost(40), 1) && near(m.lowLevelBoost(90), 1));
+	const low = attempt({ gains: { technical: 300 }, own: { technical: 1 }, xpLevels: { technical: 0 } });
+	check('a level 0 skill: its XP / 3', near(m.baseOf(low, [low]).technical, 100), m.baseOf(low, [low]).technical);
+	const old = attempt({ token: 'old', startedAt: 1e12 + 1, beatmapId: 99, gains: { technical: 300 }, own: { technical: 1 } });
+	check('a play without XP levels: the nearest play’s', near(m.baseOf(old, [low, old]).technical, 100));
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;
