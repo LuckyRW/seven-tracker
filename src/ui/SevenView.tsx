@@ -208,7 +208,7 @@ export default function SevenView({ character, version, onClose }: { character?:
 		}
 		return rows.sort((a, b) => b.perSecond - a.perSecond);
 	// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [tests, byId, attempts, medals]);
+	}, [tests, byId, attempts, medals, progress]);
 	const byKey = useMemo(() => new Map(measured.map(r => [rowKey(r), r])), [measured]);
 	const ordered = useMemo(() => [...attempts].sort((a, b) => a.startedAt - b.startedAt), [attempts]);
 	const recent = useMemo(() => ordered.slice(-RECENT_SHOWN).reverse(), [ordered]);

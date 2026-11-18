@@ -76,7 +76,8 @@ export const levelScale = (skill: string, xpLevel: number, playLevel: number, ac
 };
 /**
  * Each skill's XP level before a play: its own, kept since v0.22.0; an older play's Upgrades-screen
- * levels; else the nearest play's that has them, within 6 hours. Undefined when none does.
+ * levels; else the nearest play's that has them, within 6 hours; else, for a play of the last day,
+ * today's less the levels gained since. Undefined when none does.
  */
 const xpLevelsOf = (attempt: Attempt, all: readonly Attempt[]): Record<string, number> | undefined => {
 	const own = (a: Attempt) => a.xpLevels ?? (a.levelKind === 'upgrades' && Object.keys(a.levels).length ? a.levels : undefined);
@@ -87,7 +88,18 @@ const xpLevelsOf = (attempt: Attempt, all: readonly Attempt[]): Record<string, n
 		if (a.characterId !== attempt.characterId || !own(a) || Math.abs(a.startedAt - attempt.startedAt) > 6 * 3600_000) continue;
 		if (!best || Math.abs(a.startedAt - attempt.startedAt) < Math.abs(best.startedAt - attempt.startedAt)) best = a;
 	}
-	return best && own(best);
+	if (best) return own(best);
+	// none near: today's XP levels, less the play levels gained since (within a day; upgrades bought
+	// since make it read a little low)
+	const now = latestProgress;
+	if (!now?.xpLevels || attempt.levelKind === 'upgrades' || Date.now() - attempt.startedAt > 24 * 3600_000) return undefined;
+	const estimate: Record<string, number> = {};
+	for (const [skill, xp] of Object.entries(now.xpLevels)) {
+		const then = attempt.levels[skill];
+		if (then === undefined || now.levels[skill] === undefined) continue;
+		estimate[skill] = Math.max(0, xp - Math.max(0, now.levels[skill] - then));
+	}
+	return Object.keys(estimate).length ? estimate : undefined;
 };
 const mindblockFactor = (recentPlays: number) => lerp(1, 0.25, BLOCK_CB(Math.min(1, recentPlays / 25)));
 const RECENT_LIMIT = 50;
@@ -145,6 +157,8 @@ export type Progress7k = {
 	genetics: Record<string, number>;
 	speedUpgrades: number;
 	levelSum: number;
+	/** each skill's XP level now (the Upgrades screen's) */
+	xpLevels?: Record<string, number>;
 };
 
 type Row = Record<string, number | string>;
@@ -268,6 +282,7 @@ export const progress7k = async (characterId: number): Promise<Progress7k | unde
 		// rates open a step per Speed upgrade and per Speed prestige (rate.ts rateUnlocks)
 		speedUpgrades: num('speedUpgrades') + num('speedPrestige'),
 		levelSum: Object.values(levels).reduce((a, b) => a + b, 0),
+		xpLevels: Object.fromEntries(SKILLS_7K.map(s => [s, num(s)])),
 	};
 	latestProgress = progress;
 	return progress;
