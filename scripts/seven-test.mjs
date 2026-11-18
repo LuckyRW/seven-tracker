@@ -208,14 +208,20 @@ check('the screening grid: every third, x1 and the fastest',
 }
 
 
-// the low-level XP boost (x3 at XP level 0, none from 40) taken out
+// the level factors (low-level boost, accuracy band) counted at the play level, not the XP level
 {
 	check('x3 at level 0', near(m.lowLevelBoost(0), 3));
 	check('none at 40 and above', near(m.lowLevelBoost(40), 1) && near(m.lowLevelBoost(90), 1));
-	const low = attempt({ gains: { technical: 300 }, own: { technical: 1 }, xpLevels: { technical: 0 } });
-	check('a level 0 skill: its XP / 3', near(m.baseOf(low, [low]).technical, 100), m.baseOf(low, [low]).technical);
-	const old = attempt({ token: 'old', startedAt: 1e12 + 1, beatmapId: 99, gains: { technical: 300 }, own: { technical: 1 } });
-	check('a play without XP levels: the nearest play’s', near(m.baseOf(old, [low, old]).technical, 100));
+	check('technical at 95.78%: full at Lv24', near(m.scoreFactor('technical', 24, 0.9578), 1.5));
+	check('next to nothing at Lv101', m.scoreFactor('technical', 101, 0.9578) < 0.15, m.scoreFactor('technical', 101, 0.9578));
+	const live = (o) => attempt({ levelKind: 'play', accuracy: 0.9578, own: { technical: 1 }, ...o });
+	const prestiged = live({ gains: { technical: 300 }, levels: { technical: 101 }, xpLevels: { technical: 24 } });
+	const scaled = m.baseOf(prestiged, [prestiged]).technical;
+	check('a prestiged skill counted at its play level', near(scaled, 300 * m.levelScale('technical', 24, 101, 0.9578) ** -1) && scaled < 30, scaled);
+	const same = live({ token: 's', beatmapId: 98, gains: { technical: 300 }, levels: { technical: 101 }, xpLevels: { technical: 101 } });
+	check('XP level = play level: untouched', near(m.baseOf(same, [same]).technical, 300));
+	const old = live({ token: 'old', startedAt: 1e12 + 1, beatmapId: 99, gains: { technical: 300 }, levels: { technical: 101 } });
+	check('a play without XP levels: the nearest play’s', near(m.baseOf(old, [prestiged, old]).technical, scaled), m.baseOf(old, [prestiged, old]).technical);
 }
 
 rmSync(dir, { recursive: true, force: true });

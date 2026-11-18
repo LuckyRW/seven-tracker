@@ -42,6 +42,38 @@ const BLOCK_CB = cubic_bezier(.6, 0, .6, 1);
 /** The game's low-level XP boost (4K bots/character.ts xpFactorForLevel): up to x3 at XP level 0, gone at 40. */
 const LEVEL_CB = cubic_bezier(0, .8, .4, 1);
 export const lowLevelBoost = (xpLevel: number): number => 1 + (1 - LEVEL_CB(Math.min(1, Math.max(0, xpLevel / 40)))) * 2;
+
+const norm = (n: number, [lo, hi]: [number, number]) => Math.min(1, Math.max(0, (Math.min(hi, Math.max(lo, n)) - lo) / (hi - lo)));
+const tr = (n: number, range: [number, number], [a, b]: [number, number]) => a + norm(n, range) * (b - a);
+type Band = (level: number) => [number, number];
+/** The game's accuracy bands (4K bots/character.ts *ScoreFactor), by the 4K skill each 7K skill mostly earns through. */
+const BANDS: Record<string, Band> = {
+	general: l => [tr(l, [0, 100], [0.7, 0.95]), tr(l, [0, 100], [0.9, 1.05])],
+	hardAcc: l => [tr(l, [0, 60], [0.7, 0.93]), tr(l, [40, 100], [0.98, 1.02])],
+	acc: l => [tr(l, [0, 50], [0.7, 0.95]), tr(l, [30, 100], [1, 1.05])],
+	highAcc: l => [tr(l, [0, 75], [0.7, 0.995]), tr(l, [50, 100], [1, 1.005])],
+	speed: l => [tr(l, [10, 100], [0.7, 0.9]), tr(l, [10, 100], [1, 0.96])],
+};
+const BAND_OF: Record<string, Band> = {
+	accuracy: BANDS.highAcc, technical: BANDS.general, ln: BANDS.acc, focus: BANDS.acc,
+	sv: BANDS.hardAcc, memory: BANDS.hardAcc,
+};
+/** The game's accuracy factor for a skill at an XP level: 0 to 1.5 across the level's accuracy band. */
+export const scoreFactor = (skill: string, level: number, accuracy: number): number =>
+	tr(accuracy, (BAND_OF[skill] ?? BANDS.speed)(level), [0, 1.5]);
+/**
+ * What the game's level-based XP factors (the low-level boost, the accuracy band) gave a skill at its
+ * XP level, against what they give at its play level: base XP is counted as if the two were one, so a
+ * skill just prestiged is not worth more than it was.
+ */
+export const levelScale = (skill: string, xpLevel: number, playLevel: number, accuracy: number | undefined): number => {
+	let scale = lowLevelBoost(xpLevel) / lowLevelBoost(playLevel);
+	if (accuracy !== undefined) {
+		const at = scoreFactor(skill, xpLevel, accuracy);
+		if (at > 0.01) scale *= at / scoreFactor(skill, playLevel, accuracy);
+	}
+	return scale;
+};
 /**
  * Each skill's XP level before a play: its own, kept since v0.22.0; an older play's Upgrades-screen
  * levels; else the nearest play's that has them, within 6 hours. Undefined when none does.
@@ -675,13 +707,15 @@ const baseWith = (attempt: Attempt, before: readonly Attempt[], ownOf: (skill: s
 	const mods = parseMods(attempt.mods);
 	const medals = medals7k();
 	const xpLevels = xpLevelsOf(attempt, before);
+	// its play level: the play's own, else its XP level (nothing to scale)
+	const playLevel = (skill: string) => (attempt.levelKind !== 'upgrades' && attempt.levels[skill] !== undefined ? attempt.levels[skill] : xpLevels?.[skill] ?? 0);
 	return Object.fromEntries(Object.entries(attempt.gains).map(([skill, xp]) => {
 		// genetics stay in: base XP is what the character earns with the genes it has (they are kept,
 		// per play, in `genetics`)
 		const by = ownOf(skill) * medals * modXp(mods, skill)
 			* (MINDBLOCK.has(skill) ? block : 1) * (PHYSICAL.has(skill) ? tired : 1)
-			// the low-level boost: a skill just prestiged earns more until XP level 40, taken out
-			* (xpLevels?.[skill] !== undefined ? lowLevelBoost(xpLevels[skill]) : 1);
+			// the level factors: a skill just prestiged earns more until it climbs back, taken out
+			* (xpLevels?.[skill] !== undefined ? levelScale(skill, xpLevels[skill], playLevel(skill), attempt.accuracy) : 1);
 		return [skill, by > 0 ? xp / by : 0];
 	}));
 };
