@@ -216,6 +216,17 @@ check('the screening grid: every third, x1 and the fastest',
 	check('an import with no recorded play is kept', m.withoutCopies([copy]).length === 1);
 }
 
+// one skill off on its own: only that skill's multiplier is swapped
+{
+	const b = (t, gains, own) => attempt({ token: `s${t}`, startedAt: 1e12 + t * 6e4, beatmapId: 31, gains, own });
+	const p1 = b(0, { jacks: 100, technical: 20 }, { jacks: 1, technical: 3 });
+	const p2 = b(5, { jacks: 100, technical: 21 }, { jacks: 1, technical: 3 });
+	const odd = b(40, { jacks: 100, technical: 20 }, { jacks: 1, technical: 1 });
+	const out = m.baseOf(odd, [p1, p2, odd]);
+	check('technical alone off: its multiplier from the play before', Math.abs(out.technical / (20 / 3) - 1) < 0.05, out.technical);
+	check('jacks left alone', Math.abs(out.jacks / 100 - 1) < 0.05, out.jacks);
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;
