@@ -262,7 +262,20 @@ const MAX_ATTEMPTS = 6000;
 export const attemptsOf = (characterId: number): Attempt[] => {
 	const all = readAttempts();
 	const own = all.filter(a => a.characterId === characterId);
-	return withPlayLevels(own.length ? own : all);
+	return withPlayLevels(withoutCopies(own.length ? own : all));
+};
+
+/** Imported scores that are a recorded play saved again (imported before it was recorded): dropped. */
+export const withoutCopies = (list: readonly Attempt[]): Attempt[] => {
+	const used = new Set<Attempt>();
+	const copies = new Set<Attempt>();
+	for (const s of list) {
+		if (!s.token.startsWith('score:')) continue;
+		const live = list.find(a => !used.has(a) && !a.failed && !a.token.startsWith('score:') && a.beatmapId === s.beatmapId
+			&& Math.abs(a.rate - s.rate) < 1e-9 && a.startedAt <= s.startedAt + MATCH_AFTER && s.startedAt - a.startedAt < 30 * 60_000);
+		if (live) { used.add(live); copies.add(s); }
+	}
+	return copies.size ? list.filter(a => !copies.has(a)) : [...list];
 };
 
 /**
@@ -307,6 +320,9 @@ const sevenMapIds = (): Promise<Set<number>> => (sevenMapCache ??= beatmapStore.
 	.then(list => new Set(list.filter(({ version: v }) => v.mode === 3 && v.keys === 7).map(({ version: v }) => v.id)))
 	.catch(() => { sevenMapCache = undefined; return new Set<number>(); }));
 
+/** A recorded play may carry a start a little after its score's time (its start not seen, so the end's). */
+const MATCH_AFTER = 5 * 60_000;
+
 export const importScores = async (characterId: number): Promise<number> => {
 	let rows: { id: number; beatmapId: number; playedAt: number; rate: number; mods: string; accuracy: number; gains: string }[];
 	try {
@@ -334,7 +350,7 @@ export const importScores = async (characterId: number): Promise<number> => {
 		const at = Number(r.playedAt);
 		// the recorded play it is, if any: the latest of that map and rate started before it
 		const match = live
-			.filter(a => !used.has(a.token) && a.beatmapId === Number(r.beatmapId) && round2(a.rate) === rate && a.startedAt <= at && at - a.startedAt < 30 * 60_000)
+			.filter(a => !used.has(a.token) && a.beatmapId === Number(r.beatmapId) && round2(a.rate) === rate && a.startedAt <= at + MATCH_AFTER && at - a.startedAt < 30 * 60_000)
 			.at(-1);
 		if (match) {
 			used.add(match.token);
@@ -649,7 +665,22 @@ const baseWith = (attempt: Attempt, before: readonly Attempt[], ownOf: (skill: s
 /** Base XP per skill: the server's multipliers taken back out. Mindblock is counted off the passes before it. */
 export const baseOf = (attempt: Attempt, before: readonly Attempt[]): Record<string, number> => {
 	const skills = Object.keys(attempt.gains);
-	if (skills.every(skill => attempt.own[skill] > 0)) return baseWith(attempt, before, skill => attempt.own[skill]);
+	const refs = () => before
+		.filter(o => o !== attempt && !o.failed && o.characterId === attempt.characterId && o.beatmapId === attempt.beatmapId
+			&& Math.abs(o.rate - attempt.rate) < 1e-9 && Object.keys(o.gains).every(skill => o.own[skill] > 0))
+		.map(o => totalOf(baseWith(o, before, skill => o.own[skill])))
+		.filter(t => t > 0)
+		.sort((x, y) => x - y);
+	if (skills.every(skill => attempt.own[skill] > 0)) {
+		const own = baseWith(attempt, before, skill => attempt.own[skill]);
+		// its own multipliers, unless they put it far from this map's other passes and the plays
+		// around it do not: the game still giving the XP of upgrades a prestige just took away
+		const ref = median(refs());
+		if (ref === undefined || offBy(totalOf(own), ref) < Math.log(SUSPECT)) return own;
+		const others = ([-1, 1] as const).map(side => baseWith(attempt, before, skill => nearestOwn(attempt, before, skill, side) || attempt.own[skill]));
+		const best = others.reduce((x, y) => (offBy(totalOf(y), ref) < offBy(totalOf(x), ref) ? y : x));
+		return offBy(totalOf(best), ref) < Math.log(SUSPECT) ? best : own;
+	}
 	// a play recorded without its multipliers (imported, or no progress read): those of this
 	// character's plays just before and just after it. When they disagree (a prestige or upgrade in
 	// between), the one that puts the play nearest this map's other passes at the rate; with none
@@ -661,17 +692,15 @@ export const baseOf = (attempt: Attempt, before: readonly Attempt[]): Record<str
 	if (skills.every(skill => Math.abs(early(skill) - late(skill)) < 1e-9)) return baseWith(attempt, before, early);
 	const a = baseWith(attempt, before, early);
 	const b = baseWith(attempt, before, late);
-	const refs = before
-		.filter(o => o !== attempt && !o.failed && o.characterId === attempt.characterId && o.beatmapId === attempt.beatmapId
-			&& Math.abs(o.rate - attempt.rate) < 1e-9 && Object.keys(o.gains).every(skill => o.own[skill] > 0))
-		.map(o => totalOf(baseWith(o, before, skill => o.own[skill])))
-		.filter(t => t > 0)
-		.sort((x, y) => x - y);
-	if (!refs.length) return a;
-	const ref = refs[Math.floor(refs.length / 2)];
-	const off = (t: number) => (t > 0 ? Math.abs(Math.log(t / ref)) : Infinity);
-	return off(totalOf(b)) < off(totalOf(a)) ? b : a;
+	const ref = median(refs());
+	if (ref === undefined) return a;
+	return offBy(totalOf(b), ref) < offBy(totalOf(a), ref) ? b : a;
 };
+
+/** How far a pass's base XP/s may stray from the map's other passes before its multipliers are doubted. */
+const SUSPECT = 1.6;
+const median = (sorted: number[]) => (sorted.length ? sorted[Math.floor(sorted.length / 2)] : undefined);
+const offBy = (t: number, ref: number) => (t > 0 ? Math.abs(Math.log(t / ref)) : Infinity);
 
 export const totalOf = (xp: Record<string, number>) => Object.values(xp).reduce((a, b) => a + b, 0);
 

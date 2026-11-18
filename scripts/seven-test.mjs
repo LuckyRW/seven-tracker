@@ -199,6 +199,20 @@ check('the screening grid: every third, x1 and the fastest',
 	check('no live plays: left as they were', m.withPlayLevels([old(5)])[0].levelSum === 3);
 }
 
+// a live pass whose own multipliers put it far off the map's other passes takes its neighbours'
+{
+	const a = (t, map, xp, own, token) => attempt({ token: token ?? `t${t}`, startedAt: 1e12 + t * 6e4, beatmapId: map, gains: accOnly(xp), own: own === undefined ? {} : { accuracy: own } });
+	const old1 = a(0, 21, 100, 1), old2 = a(5, 21, 105, 1), before = a(30, 22, 300, 3);
+	const stale = a(40, 21, 300, 1);
+	const out = m.baseOf(stale, [old1, old2, before, stale]);
+	check('stale multipliers: the play before’s', Math.abs(out.accuracy / 100 - 1) < 0.05, out.accuracy);
+	const real = a(40, 21, 110, 1);
+	check('in line with the map: its own', Math.abs(m.baseOf(real, [old1, old2, before, real]).accuracy / 110 - 1) < 0.05, m.baseOf(real, [old1, old2, before, real]).accuracy);
+	const live = a(10, 23, 100, 1, 'live'), copy = a(11, 23, 100, undefined, 'score:9');
+	check('an imported copy of a recorded play is dropped', m.withoutCopies([live, copy]).length === 1);
+	check('an import with no recorded play is kept', m.withoutCopies([copy]).length === 1);
+}
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;
