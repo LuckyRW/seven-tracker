@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { beatmapStore, type CharacterRow } from '@oss-idle/addon-sdk';
 import { rateSteps } from '@oss-idle/shared/rate';
-import { replacePlaylist } from '../engine/playlist.js';
+import { replacePlaylist, type PlaylistEntry } from '../engine/playlist.js';
 import {
 	attemptsOf, baseOf, failCeiling, levelSumNow, readFailRule, saveFailRule, type FailRule, MEDALS_KEY, medals7k, progress7k, readBars, recorderStatus, reachOf, ringOrder, screenState, testsOf, totalOf, type ScreenState,
 	type Attempt, type Progress7k,
@@ -56,6 +56,8 @@ const ORDER_KEY = 'seven-tracker:picked-order';
 const TAB_KEY = 'seven-tracker:tab';
 const MIX_KEY = 'seven-tracker:mix';
 const FARM_KEY = 'seven-tracker:farm';
+/** The Playlist tab's: a Screening test after every this many plays (0: none). */
+const PICKED_TESTS_KEY = 'seven-tracker:picked-tests';
 const RECENT_SHOWN = 100;
 /** Every rate, not only Speed's: off unless ticked (a new key, so it starts off once Speed can be read). */
 const ALL_RATES_KEY = 'seven-tracker:every-rate';
@@ -252,12 +254,38 @@ export default function SevenView({ character, version, onClose }: { character?:
 			skills,
 		};
 	}, { plays: 0, seconds: 0, xp: 0, drift: 0, unknownDrift: false, skills: {} as Record<string, number> });
+	const [pickedTests, setPickedTestsState] = useState<number>(() => load(PICKED_TESTS_KEY, 0));
+	const setPickedTests = (v: number) => { setPickedTestsState(v); keep(PICKED_TESTS_KEY, v); };
 	const savePicked = async () => {
 		if (!rotation.length) return;
 		setSaved('Saving...');
 		try {
-			const { created } = await replacePlaylist(pickedName, rotation.map(row => ({ beatmapId: row.map.beatmapId, rate: row.rate, mods: [], repeat: picked[rowKey(row)] })));
-			setSaved(`${created ? 'Created' : 'Updated'} "${pickedName}" with ${rotation.length} maps (${loop.plays} plays a loop). Reopen song select to see it.`);
+			const every = Math.max(0, Math.floor(pickedTests));
+			const tests = every ? screenEntries() : [];
+			if (!tests.length) {
+				const { created } = await replacePlaylist(pickedName, rotation.map(row => ({ beatmapId: row.map.beatmapId, rate: row.rate, mods: [], repeat: picked[rowKey(row)] })));
+				setSaved(`${created ? 'Created' : 'Updated'} "${pickedName}" with ${rotation.length} maps (${loop.plays} plays a loop)${every ? ', no tests left to mix in' : ''}. Reopen song select to see it.`);
+				return;
+			}
+			// the loop play by play, Screening's next test after every `every` plays, until the tests
+			// run out (at the end of a loop) or the playlist is full
+			const plays = rotation.flatMap(row => Array.from({ length: picked[rowKey(row)] }, () => ({ beatmapId: row.map.beatmapId, rate: row.rate })));
+			const out: { beatmapId: number; rate: number }[] = [];
+			let test = 0;
+			for (let i = 0; out.length < maxEntries; i++) {
+				if (i % plays.length === 0 && i > 0 && test >= tests.length) break;
+				out.push(plays[i % plays.length]);
+				if ((i + 1) % every === 0 && test < tests.length && out.length < maxEntries) out.push(tests[test++]);
+			}
+			// back-to-back plays of one map and rate as one entry, repeated
+			const merged: (PlaylistEntry & { repeat: number })[] = [];
+			for (const e of out) {
+				const last = merged.at(-1);
+				if (last && last.beatmapId === e.beatmapId && last.rate === e.rate && last.repeat < MAX_REPEAT) last.repeat++;
+				else merged.push({ ...e, mods: [], repeat: 1 });
+			}
+			const { created } = await replacePlaylist(pickedName, merged);
+			setSaved(`${created ? 'Created' : 'Updated'} "${pickedName}" with ${out.length - test} farm plays and ${test} tests (one after every ${every}). Reopen song select to see it; save again after playing to take in the results.`);
 		} catch (e) {
 			setSaved(e instanceof Error ? e.message : String(e));
 		}
@@ -309,18 +337,23 @@ export default function SevenView({ character, version, onClose }: { character?:
 		return n;
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [maps, rings, tests, ceiling, byKey, failRule, levelNow, reach]);
-	const saveTests = async (kind: 'x1' | 'screen' | 'mixed' | 'farm') => {
-		// maps hardest first by their x1 stars, ring by ring: every map at x1, then every map a step
-		// slower, then a step faster... A ring's maps are in only once the ring before was played for
-		// them: rebuild the playlist as results come in.
+	/** What Screening has left to play, in its order: ring by ring, hardest map first. */
+	const screenEntries = (x1Only = false) => {
 		const ordered = [...maps].sort((a, b) => b.difficulty - a.difficulty);
 		const entries: { beatmapId: number; rate: number }[] = [];
-		for (const rate of kind === 'x1' ? rings.filter(r => r === 1) : rings) {
+		for (const rate of x1Only ? rings.filter(r => r === 1) : rings) {
 			for (const m of ordered) {
 				const st = stateAt(m, rate);
 				if (st === 'open' || st === 'retest') entries.push({ beatmapId: m.beatmapId, rate });
 			}
 		}
+		return entries;
+	};
+	const saveTests = async (kind: 'x1' | 'screen' | 'mixed' | 'farm') => {
+		// maps hardest first by their x1 stars, ring by ring: every map at x1, then every map a step
+		// slower, then a step faster... A ring's maps are in only once the ring before was played for
+		// them: rebuild the playlist as results come in.
+		const entries = screenEntries(kind === 'x1');
 		let kept = entries.slice(0, maxEntries);
 		// mixed: after every `every` tests, the next of your best maps (top 1, top 2, ... top N, then top 1 again)
 		const farm = bestRows.slice(0, Math.max(1, mix.top));
@@ -410,6 +443,11 @@ export default function SevenView({ character, version, onClose }: { character?:
 						<button disabled={!bestTen.length} onClick={() => setPicked(Object.fromEntries(bestTen.map(r => [rowKey(r), 1])))}
 							title="Replace the playlist with your 10 best maps by base XP/s, each at its best rate">Top 10</button>
 						<button disabled={!rotation.length} onClick={() => setPicked({})}>Clear</button>
+						<label className="strain-filter" title="Mix in Screening's next test (the Testing tab's order) after every this many plays; 0 is none. The playlist then runs play by play, up to the Testing tab's 'Up to' entries">
+							Test every
+							<NumberField aria-label="Test every this many plays" min={0} max={200} integer value={pickedTests} onChange={setPickedTests} />
+							plays
+						</label>
 						<button className="primary" disabled={!rotation.length} onClick={() => void savePicked()} title="Save these maps, each at its rate and repeats, as a game playlist">Save playlist</button>
 					</div>
 					<div className="rows">
